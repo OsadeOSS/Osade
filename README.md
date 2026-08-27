@@ -599,22 +599,3 @@ Osade is built on the Code-OSS project.
 
 See the repository's license and attribution files for details.
 
-```
-
-### One thing I'd strongly recommend
-
-Don't put all 20 "core rules" as a giant wall at the top of the actual GitHub README. **The README above turns them into a product philosophy.**
-
-The three lines I'd make visually prominent on the GitHub page are:
-
-> **Humans decide. Agents execute. Osade coordinates and remembers.**
-
-and:
-
-> **Understand → Isolate → Execute → Learn → Verify → Review → Ship**
-
-and:
-
-> **The development environment for AI-powered open source contribution.**
-
-That gives someone landing on the repo in 15 seconds a clear understanding of **why Osade exists**, rather than making them read a specification.
