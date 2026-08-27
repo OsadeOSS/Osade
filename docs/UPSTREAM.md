@@ -1,126 +1,364 @@
-# Upstream (VS Code) integration
+# Upstream VS Code Integration
 
-This repo has two long-lived branches and two remotes.
+Osade is built on top of [Microsoft VS Code](https://github.com/microsoft/vscode).
 
-| Branch   | Purpose                                              | Rule |
-|----------|------------------------------------------------------|------|
-| `main`   | OSADe product/development branch. All OSADe work.    | Never rewritten, never replaced. |
-| `vscode` | Clean mirror of `microsoft/vscode:main`. No OSADe code. | Fast-forward only. Never commit here. |
+This document explains how Osade maintains its relationship with the VS Code repository and how upstream changes are brought into Osade.
 
-| Remote     | URL |
-|------------|-----|
-| `origin`   | https://github.com/rajarshidattapy/Osade.git |
-| `upstream` | https://github.com/microsoft/vscode.git (fetches `main` only, no tags) |
+## Repository Architecture
 
-`vscode` tracks `upstream/main`, so it stays byte-identical to upstream. `main` never
-receives VS Code commits automatically — everything crosses over by explicit
-cherry-pick or merge, described below.
+Osade uses two long-lived branches:
 
-## Updating `vscode`
+| Branch   | Purpose                            | Rule                                    |
+| -------- | ---------------------------------- | --------------------------------------- |
+| `main`   | Osade's product/development branch | All Osade development happens here      |
+| `vscode` | Clean mirror of VS Code `main`     | Must contain only upstream VS Code code |
+
+And two remotes:
+
+| Remote     | Purpose                      |
+| ---------- | ---------------------------- |
+| `origin`   | Osade's GitHub repository    |
+| `upstream` | Microsoft VS Code repository |
+
+```text
+origin
+└── Osade
+    └── main          ← Osade development
+
+upstream
+└── microsoft/vscode
+    └── main          ← VS Code upstream
+
+vscode                ← local mirror of upstream/main
+```
+
+### Important distinction
+
+`main` is **Osade's branch**.
+
+`vscode` is **only an upstream reference branch**. It must not contain Osade-specific changes.
+
+VS Code changes are **never automatically merged into `main`**.
+
+They are deliberately selected and brought into Osade when needed.
+
+---
+
+# Keeping the `vscode` Mirror Updated
+
+The `vscode` branch should always represent the latest `upstream/main`.
+
+First fetch upstream:
 
 ```bash
 git fetch upstream
-git checkout vscode
+```
+
+Then update the mirror:
+
+```bash
+git switch vscode
 git merge --ff-only upstream/main
 ```
 
-`--ff-only` is the safety net: if it refuses, `vscode` has diverged (something got
-committed on it). Do not force it — see [Conflict handling](#conflict-handling).
+`--ff-only` is intentional. If this fails, something was committed to `vscode` that does not exist in VS Code upstream.
 
-Push the mirror to your fork if you want it there:
+Do **not** resolve this by merging or force-pushing.
+
+Check what happened:
+
+```bash
+git log upstream/main..vscode --oneline
+```
+
+If there are unexpected commits, preserve them on another branch before fixing `vscode`.
+
+The goal is:
+
+```text
+vscode == upstream/main
+```
+
+After updating the mirror, it can optionally be pushed to Osade's GitHub repository:
 
 ```bash
 git push origin vscode
 ```
 
-## Comparing `main` and `vscode`
+Contributors do not need to maintain this branch.
+
+---
+
+# Comparing Osade With VS Code
+
+To see what Osade has changed relative to upstream:
 
 ```bash
-git diff vscode..main --stat              # everything OSADe changed vs upstream
-git diff vscode..main -- src/vs/workbench # scoped to one area
-git log vscode..main --oneline            # OSADe commits not in upstream
-git log main..vscode --oneline            # upstream commits not in OSADe
-git merge-base main vscode                # last shared commit
+git diff vscode..main --stat
 ```
 
-## Creating a VS Code feature branch
-
-Branch off `vscode`, not `main`, when the work is upstream-shaped (a patch you might
-send to microsoft/vscode, or a change you want to rebase cleanly on future upstream):
+To inspect a specific area:
 
 ```bash
-git fetch upstream
-git checkout -b feature/my-change vscode
-# ...work, commit...
+git diff vscode..main -- src/vs/workbench
 ```
 
-Keep it current with upstream by rebasing:
+To see Osade commits that are not in the upstream mirror:
 
 ```bash
-git fetch upstream
-git rebase upstream/main feature/my-change
+git log vscode..main --oneline
 ```
 
-## Bringing a VS Code change into `main`
-
-Never merge `vscode` into `main` wholesale. Pick what you need.
-
-Single commit:
+To see upstream commits that are not in Osade:
 
 ```bash
-git log vscode --oneline -20                # find the commit
-git checkout main
-git cherry-pick <sha>
+git log main..vscode --oneline
 ```
 
-Range of commits (oldest..newest, exclusive of the first):
+To find their common ancestor:
+
+```bash
+git merge-base main vscode
+```
+
+---
+
+# Bringing Upstream Changes Into Osade
+
+**Do not merge the entire `vscode` branch into `main` just to update Osade.**
+
+Osade intentionally diverges from VS Code.
+
+Instead, bring upstream changes into `main` deliberately.
+
+## Single commit
+
+Find the desired commit:
+
+```bash
+git log vscode --oneline -20
+```
+
+Switch to Osade's branch:
+
+```bash
+git switch main
+```
+
+Apply the commit:
+
+```bash
+git cherry-pick <commit-sha>
+```
+
+Example:
+
+```bash
+git cherry-pick 1a4a18dd247
+```
+
+This preserves the upstream commit as a commit in Osade's history.
+
+---
+
+## Multiple commits
+
+For a contiguous range:
 
 ```bash
 git cherry-pick <old-sha>..<new-sha>
 ```
 
-One file or directory at the upstream version:
+Git applies the commits after `<old-sha>` through `<new-sha>`.
+
+For unrelated individual commits:
 
 ```bash
-git checkout main
-git checkout vscode -- path/to/file.ts
-git commit -m "Take upstream version of path/to/file.ts"
+git cherry-pick <sha1> <sha2> <sha3>
 ```
 
-Preview before committing to it:
+---
+
+# Previewing a Commit
+
+Before committing an upstream change, you can apply it without creating a commit:
 
 ```bash
-git cherry-pick -n <sha>     # stage without committing; `git cherry-pick --abort` to back out
+git cherry-pick -n <commit-sha>
+```
+
+Inspect the result:
+
+```bash
 git diff --cached
 ```
 
-## Conflict handling
-
-**Cherry-pick conflicts** — expected, since `main` has diverged:
+If you want to keep it:
 
 ```bash
-git status                   # lists conflicted paths
-# edit files, resolve markers
-git add <resolved-paths>
-git cherry-pick --continue
-# or, to walk away cleanly:
+git commit -m "Apply upstream VS Code change"
+```
+
+If you want to discard it:
+
+```bash
 git cherry-pick --abort
 ```
 
-**`merge --ff-only` refused on `vscode`** — the branch has commits upstream does not.
-Do not reset or force. Move the stray work off, then fast-forward:
+---
+
+# Taking a Specific Upstream File
+
+Sometimes an entire commit is unnecessary and only one upstream file is wanted.
+
+From `main`:
 
 ```bash
-git checkout vscode
-git log upstream/main..vscode --oneline    # what is extra
-git branch salvage/vscode-extras vscode    # keep it, nothing is lost
-git checkout -B vscode upstream/main       # re-point vscode at upstream
+git switch main
+git restore --source=vscode -- path/to/file.ts
 ```
 
-Then cherry-pick anything worth keeping from `salvage/vscode-extras` onto `main`.
+Then inspect the change:
 
-**Rules that do not bend**
+```bash
+git diff
+```
 
-- No `reset --hard`, no force push, no branch deletion on `main` or `vscode`.
-- No OSADe code on `vscode`.
-- No automatic merge or cherry-pick from `vscode` into `main`.
+If correct:
+
+```bash
+git add path/to/file.ts
+git commit -m "Sync file with upstream VS Code"
+```
+
+The same approach can be used for a directory when appropriate.
+
+---
+
+# Conflict Handling
+
+Conflicts are expected.
+
+Osade modifies parts of VS Code, so an upstream commit may not apply cleanly.
+
+When a cherry-pick reports conflicts:
+
+```bash
+git status
+```
+
+Resolve the conflicted files manually.
+
+Then:
+
+```bash
+git add <resolved-files>
+git cherry-pick --continue
+```
+
+If the upstream change is not suitable for Osade:
+
+```bash
+git cherry-pick --abort
+```
+
+Never blindly choose "theirs" or "ours" for a conflict. Understand what the upstream change does before resolving it.
+
+---
+
+# Osade-Owned Files
+
+The following files/directories are owned by Osade:
+
+```text
+docs/
+CONTRIBUTING.md
+```
+
+Upstream synchronization must **not overwrite Osade's versions** of these files.
+
+If VS Code introduces files with the same paths, Osade's versions take priority.
+
+---
+
+# Working on Upstream-Shaped Changes
+
+If you are developing a change that may eventually be contributed back to VS Code, create the branch from `vscode`:
+
+```bash
+git switch vscode
+git switch -c feature/my-change
+```
+
+Make and commit the change normally.
+
+To update the feature branch with newer upstream changes:
+
+```bash
+git fetch upstream
+git rebase upstream/main
+```
+
+These branches are separate from normal Osade development.
+
+---
+
+# Contributor Workflow
+
+Most contributors should simply work from `main`.
+
+```bash
+git switch main
+git pull origin main
+git switch -c feature/my-osade-feature
+```
+
+Make changes, commit them, and open a pull request against Osade's `main`.
+
+Contributors generally do **not** need to interact with the `upstream` remote or maintain the `vscode` mirror.
+
+---
+
+# Rules
+
+### `main`
+
+* `main` is the Osade product branch.
+* Never force-push `main`.
+* Never rewrite `main` history.
+* Do not replace `main` with `upstream/main`.
+* Osade-specific changes belong here.
+
+### `vscode`
+
+* `vscode` is a clean mirror of `upstream/main`.
+* No Osade-specific code should be committed directly to `vscode`.
+* Update it using fast-forward-only operations.
+* Do not force-push it.
+* If it diverges, preserve any unexpected commits on another branch and restore the mirror to `upstream/main`.
+
+### Upstream changes
+
+* Do not automatically merge all VS Code changes into Osade.
+* Review upstream changes before bringing them into `main`.
+* Prefer `cherry-pick` for individual upstream commits.
+* Resolve conflicts deliberately.
+* Keep Osade-owned files such as `docs/` and `CONTRIBUTING.md` intact.
+
+The overall flow is:
+
+```text
+Microsoft VS Code
+       │
+       │ upstream/main
+       ▼
+    vscode
+       │
+       │ select changes
+       │ cherry-pick / targeted sync
+       ▼
+     main
+       │
+       ▼
+     Osade
+```
