@@ -116,8 +116,11 @@ async function main() {
     );
   }
 
-  // ---- types.ts -----------------------------------------------------------
-  let types = BANNER(key) + '\n/* eslint-disable */\n';
+  // ---- types/<schema>.ts --------------------------------------------------
+  // One module per top-level schema. They must not be concatenated: herdr's five bundles
+  // share `$defs` names (AgentStatus, ReadSource, EventData, …) with different shapes, so a
+  // single file collides on every one of them.
+  const files = {};
   for (const schemaKey of SCHEMA_KEYS) {
     const raw = schema.schemas[schemaKey];
     if (!raw) continue;
@@ -130,8 +133,15 @@ async function main() {
       unreachableDefinitions: true,
       style: { singleQuote: true, printWidth: 100 },
     });
-    types += `\n// ── ${schemaKey} ${'─'.repeat(Math.max(0, 62 - schemaKey.length))}\n\n${ts}`;
+    files[`types/${schemaKey}.ts`] = BANNER(key) + '\n/* eslint-disable */\n\n' + ts;
   }
+
+  const types =
+    BANNER(key) +
+    SCHEMA_KEYS.filter((k) => schema.schemas[k])
+      .map((k) => `export * as ${pascal(k)} from './types/${k}.js';`)
+      .join('\n') +
+    '\n';
 
   // ---- methods.ts ---------------------------------------------------------
   const methodNames = methods.map((m) => `  | '${m.method}'`).join('\n');
@@ -141,7 +151,7 @@ async function main() {
 
   const methodsTs =
     BANNER(key) +
-    `import type * as T from './types.js';
+    `import type * as T from './types/request.js';
 
 /** Every method name in the pinned schema. Derived, never typed by hand. */
 export type HerdrMethod =
@@ -175,15 +185,13 @@ export const HERDR_PIN = Object.freeze({
     BANNER(key) +
     `export * from './methods.js';
 export * from './pin.js';
-export type * as HerdrSchema from './types.js';
+export * as HerdrSchema from './types.js';
 `;
 
-  const files = {
-    'types.ts': types,
-    'methods.ts': methodsTs,
-    'pin.ts': pinTs,
-    'index.ts': indexTs,
-  };
+  files['types.ts'] = types;
+  files['methods.ts'] = methodsTs;
+  files['pin.ts'] = pinTs;
+  files['index.ts'] = indexTs;
 
   if (CHECK_ONLY) {
     let drifted = [];
@@ -202,7 +210,7 @@ export type * as HerdrSchema from './types.js';
     return;
   }
 
-  mkdirSync(OUT_DIR, { recursive: true });
+  mkdirSync(join(OUT_DIR, 'types'), { recursive: true });
   for (const [name, content] of Object.entries(files)) {
     writeFileSync(join(OUT_DIR, name), content);
   }
