@@ -79,14 +79,26 @@ export function eventForStatus(status: HerdrAgentStatus): AgentEvent | null {
  * Applies one herdr input to the stored fact.
  *
  * §5.4.1 — INVARIANT: herdr's event stream replays the ring buffer on connect and can drop
- * silently, and its envelopes carry no sequence number. So an input whose `seq` is not strictly
- * greater than the stored `state_change_seq` is **dropped**, not merged. This is what stops a
- * replayed `working` from clobbering a live `done`.
+ * silently, and its envelopes carry no sequence number. So a **state change** whose `seq` is
+ * not strictly greater than the stored `state_change_seq` is dropped, not merged. This is what
+ * stops a replayed `working` from clobbering a live `done`.
  *
  * The caller must write `patch` and `state_change_seq` in one transaction. A fact stored
  * without advancing the counter, or a counter advanced without the fact, reintroduces the bug.
+ *
+ * **Only state changes participate in the gate.** A session binding carries no state, so it
+ * neither consults nor advances the counter. Letting it advance the watermark would make the
+ * fold order-dependent: a session binding stamped with a high `seq` would swallow every
+ * status event below it and leave the fact stuck at whatever it happened to hold — which is
+ * the exact class of bug the gate exists to prevent, reintroduced from the other side. The
+ * ordering property test in `test/unit/derive-status.test.ts` pins this down.
  */
 export function reduceAgentInput(current: AgentFact | null, input: AgentInput): ReduceResult {
+  if (input.kind === 'session') {
+    // Idempotent and independent of the status fold, so it converges under any ordering.
+    return { patch: { agent_session_id: input.agentSessionId } };
+  }
+
   const storedSeq = current?.state_change_seq ?? -1;
   if (input.seq <= storedSeq) return { patch: null, dropped: 'stale_seq' };
 
@@ -130,9 +142,6 @@ export function reduceAgentInput(current: AgentFact | null, input: AgentInput): 
       };
     }
 
-    case 'session': {
-      return { patch: { ...base, agent_session_id: input.agentSessionId } };
-    }
   }
 }
 

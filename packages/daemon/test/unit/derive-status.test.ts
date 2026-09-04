@@ -304,7 +304,7 @@ describe('deriveStatus — properties (§20.2)', () => {
       { kind: 'status', status: 'blocked', seq: 2, at: NOW - 200 },
       { kind: 'status', status: 'working', seq: 3, at: NOW - 100 },
       { kind: 'status', status: 'done', seq: 4, at: NOW },
-      { kind: 'session', seq: 5, at: NOW, agentSessionId: 'sess-1' },
+      { kind: 'session', at: NOW, agentSessionId: 'sess-1' },
     ];
 
     const inOrder = applyAll(inputs);

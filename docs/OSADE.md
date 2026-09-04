@@ -686,10 +686,17 @@ transition entirely without knowing.
 > **INVARIANT — every agent fact write is gated on a monotonic counter, and every
 > (re)connect reconciles against a snapshot.**
 >
-> 1. Each write carries the counter from its payload: `AgentInfo.state_change_seq`, or
->    `PaneInfo.revision` where that is what the event gives. A write whose counter is **not
->    strictly greater** than the stored `agent_fact.state_change_seq` is **dropped**, not
->    merged.
+> 1. Each **state change** carries the counter from its payload:
+>    `AgentInfo.state_change_seq`, or `PaneInfo.revision` where that is what the event gives. A
+>    state change whose counter is **not strictly greater** than the stored
+>    `agent_fact.state_change_seq` is **dropped**, not merged.
+> 1a. **Only state changes participate in the gate.** A payload that carries no state — an
+>    `agent_session` binding, say — neither consults nor advances the counter. Letting one
+>    advance the watermark makes the fold order-dependent: a binding stamped with a high
+>    sequence swallows every status event below it and strands the fact at whatever it happened
+>    to hold. That is the same class of bug as a replayed `working` clobbering a live `done`,
+>    entered from the other side. *Found by the §20.2 ordering property test during M0, not by
+>    reading; keep that test.*
 > 2. The counter and the fact it guards are written in **one transaction**. A fact stored
 >    without advancing the counter, or a counter advanced without the fact, both reintroduce
 >    the bug.
