@@ -1,12 +1,31 @@
-/target
+**/target/
 node_modules/
-/vendor/libghostty-vt/zig-pkg/
+**/dist/
+**/build/
+**/vendor/libghostty-vt/zig-pkg/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 *.swp
 *.swo
 *~
 .DS_Store
+Thumbs.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Editor settings
+.vscode/
+.idea/
 
 /docs/*
 !/docs/next/
@@ -18,6 +37,9 @@ __pycache__/
 /.local/
 /backlog
 
+# Local agent state
+/.agents/.pi/
+/.agents/.zed/
 /.pi/todos
 /.pi/issues
 /.pi/cache
