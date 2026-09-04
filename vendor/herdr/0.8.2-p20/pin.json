@@ -1,0 +1,54 @@
+{
+  "$comment": "The pinned herdr target. api-schema.json in this directory is the ONLY permitted source for herdr client codegen (OSADE.md §4.1). backend/ is reference reading for behaviour, never for API derivation.",
+
+  "herdr": {
+    "version": "0.8.2",
+    "protocol": 20,
+    "schema_version": 1,
+    "method_count": 91,
+    "endpoint_protocol_generation": null
+  },
+
+  "identity": {
+    "$comment": "herdr's version string is NOT a contract. Two builds both report 0.8.2 with different protocols and a 10-method gap (PRD-DELTA #1). The identity of a herdr target is the tuple (protocol, method set), and the version string is a label. Directory names are <version>-p<protocol> for that reason.",
+    "key": "0.8.2-p20",
+    "compare_on": ["protocol", "method_set"],
+    "never_compare_on": ["version"]
+  },
+
+  "schema": {
+    "path": "api-schema.json",
+    "sha256": "033bd61133e91c3f7f1ed27a78f0189b93cf13092e26fb315ed9cb6ccd6c637f",
+    "captured_with": "herdr api schema --json",
+    "captured_at": "2026-09-04",
+    "method_list": "methods.txt"
+  },
+
+  "binary": {
+    "$comment": "NOT YET VENDORED. This records the binary the schema was captured from so the checksum can be verified when packaging lands in M0. Do not treat a matching checksum as the only gate — run the boot drift check (OSADE.md §4.1.1) regardless, because a user may have a different herdr on PATH.",
+    "vendored": false,
+    "target": "x86_64-pc-windows-msvc",
+    "source_path": "~/.herdr/packages/standalone/releases/0.8.2-x86_64-pc-windows-msvc/herdr",
+    "size_bytes": 22400512,
+    "sha256": "467682cdb5fa482c54897c6b9c96a5300a3516a72ef70ec3d009e16fadb131b3",
+    "expected_layout": "vendor/herdr/<version>-p<protocol>/<target>/herdr[.exe]",
+    "todo": "M0 packaging: fetch per-platform release binaries into this directory, record a sha256 per target, verify at boot (OSADE.md §18.1)."
+  },
+
+  "known_gaps": {
+    "$comment": "Methods present in backend/src/api/schema.rs but absent from this pinned schema. Calling any of these against this target returns invalid_request. See PRD-DELTA #1.",
+    "absent_from_this_target": [
+      "command.invoke",
+      "integration.list",
+      "pane.copy_motion",
+      "pane.copy_search",
+      "pane.edit_scrollback",
+      "pane.link.activate",
+      "pane.scroll",
+      "pane.selection.read",
+      "product_announcement.dismiss",
+      "release_notes.dismiss"
+    ],
+    "capabilities_absent": ["endpoint_protocol_generation"]
+  }
+}

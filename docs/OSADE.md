@@ -4,6 +4,18 @@
 > agent. Sections marked **INVARIANT** are load-bearing; breaking one produces a class of bug
 > that is expensive to find later. Sections marked **DECISION** record a choice that was made
 > deliberately over a plausible alternative — do not re-litigate them mid-build.
+>
+> **Revised 2026-09-04** against a live herdr `0.8.2-p20`. Sections carrying a
+> *"Corrected … per PRD-DELTA #n"* marker were wrong about herdr and now match verified
+> behaviour. Two companions:
+>
+> - **`docs/HERDR-CONTRACT.md`** — the verified herdr surface: real method names, event names
+>   and payload shapes, each with a `file:line` citation or a live transcript. **Where this
+>   document and the contract disagree, the contract is right.** Code against it.
+> - **`docs/PRD-DELTA.md`** — what was wrong here and why, numbered #1–#15.
+>
+> One decision was reversed outright rather than corrected: **§4.4**, the embedded terminal,
+> is deferred past M0. One INVARIANT was added: **§5.4.1**, the monotonic fact gate.
 
 ---
 
@@ -55,6 +67,12 @@ Do not build these. If a task seems to require one, stop and ask.
    and an upstream issue link.
 2. **Do not reimplement** PTY handling, VT parsing, terminal emulation, worktree creation, agent
    process detection, or session restore. herdr does all of it.
+   *Corrected 2026-09-04 per PRD-DELTA #10.* **Carve-out:** Osade may run read-only and
+   maintenance git commands in a repo or worktree — `git worktree prune`, `status`,
+   `diff`, `rev-parse`, `stash`. herdr never prunes before `worktree add`
+   (`backend/src/worktree.rs:238-320`), so the "missing but already registered" failure is
+   ours to prevent, and there is no git-status event to subscribe to (§7). What stays herdr's
+   is worktree *lifecycle*: create, open, remove.
 3. **No auto-merge. Ever.** Osade never merges a PR.
 4. **No agent-authored public write without a gate.** Comments, PRs, reviews, pushes — all gated.
 5. **No hosted multi-tenant service.** Local-first, single user, one machine.
@@ -126,7 +144,13 @@ dialogs. An Electron `utilityProcess` opens the socket, decodes frames, and is h
 ### 2.1 Network posture — INVARIANT
 
 - Daemon binds `127.0.0.1` only. No `0.0.0.0` listener in v1.
-- herdr sockets are unix domain sockets, mode `0600`.
+- herdr sockets are unix domain sockets, mode `0600` — **on Unix**.
+  *Corrected 2026-09-04 per PRD-DELTA #12.* On Windows they are **named pipes**, not files:
+  `interprocess` maps the path string through `GenericNamespaced`
+  (`backend/src/ipc.rs:44-51`), so a client connects to `\\.\pipe\C:\…\herdr.sock` and access
+  is governed by an SDDL descriptor (`backend/src/ipc.rs:156`), not a file mode. The `.sock`
+  path also exists on disk as a marker file (`backend/src/ipc.rs:76`); **its presence does not
+  mean a server is listening** — probe with `ping`.
 - No unauthenticated route reachable off-loopback. There is no remote mode in v1.
 - The daemon never holds a GitHub token in its config file. Tokens live in Electron
   `safeStorage` and are passed to the daemon at spawn over an fd/env handshake, held in memory
@@ -178,30 +202,109 @@ herdr's vocabulary appears.
 
 ### 4.1 Generate the client, do not hand-write it — INVARIANT
 
-herdr publishes a JSON Schema for its API at `docs/next/api/herdr-api.schema.json`, generated
-via `schemars`.
+*Corrected 2026-09-04 per PRD-DELTA #1 and #2.*
 
-**Milestone 0, task 1:** vendor that schema and generate a typed TypeScript client from it
-(`json-schema-to-typescript` or `quicktype`) into `packages/daemon/src/herdr/generated/`.
-Commit the generated output and the source schema together with the herdr version string.
+**herdr's version string is not a contract.** Two builds both call themselves `0.8.2` and
+differ by protocol (20 vs 22), by ten methods, and by one capability field. Generating a
+client from the wrong one produces calls the shipped binary answers with `invalid_request` —
+not at boot, but the first time a user hits that code path.
 
-Do **not** hand-write method names from memory or from this document. This document names a few
-methods and events illustratively (`Ping`, `PaneSplit`, `AgentPrompt`, `PaneAgentStatusChanged`,
-`WorkspaceFocused`, `PaneOutputMatched`, `HookStateReported`, `HookMetadataReported`,
-`AgentSessionReported`); the schema is the truth, and it has roughly 100 methods. If a method
-this spec assumes does not exist in the schema, stop and report it rather than approximating.
+So the identity of a herdr target is the tuple **(protocol number, method set)**. The version
+string is a label.
 
-Add a startup guard: the daemon reads herdr's version, compares against the pinned version the
-client was generated from, and refuses to start on a mismatch with an actionable message.
+**INVARIANT — the pinned vendored schema is the only codegen source.**
+
+```
+vendor/herdr/<version>-p<protocol>/
+├── api-schema.json     captured with `herdr api schema --json` from the vendored binary
+├── methods.txt         the sorted method set, for diffing
+├── pin.json            protocol, method count, schema sha256, binary sha256, known gaps
+└── <target>/herdr      the binary itself (M0 packaging)
+```
+
+`backend/` is **reference reading for behaviour only, never a source of API derivation.** It
+is an unreleased tree ahead of any binary Osade ships. Read it to understand what a method
+*does*; never to learn that a method exists.
+
+The upstream file OSADE.md previously named — `docs/next/api/herdr-api.schema.json` — is
+absent from `backend/` as vendored, and is `include_str!`'d at `backend/src/cli/api.rs:1`, so
+that tree does not compile. Do not try to restore it. The binary embeds and prints its own
+schema; that is the capture path.
+
+**Milestone 0, task 1:** generate a typed TypeScript client from the pinned
+`api-schema.json` (`json-schema-to-typescript` or `quicktype`) into
+`packages/daemon/src/herdr/generated/`. Commit the generated output, the schema, and
+`pin.json` together.
+
+Do **not** hand-write method names from memory or from this document. This document names
+methods illustratively; the pinned schema is the truth, and it has **91 methods** at
+`0.8.2-p20`. If a method this spec assumes is not in the pinned schema, stop and report it
+rather than approximating. Verified method names, event names and payload shapes live in
+`docs/HERDR-CONTRACT.md`.
+
+#### 4.1.1 The boot drift check — specification
+
+A contract test, run both in CI and as a daemon boot guard. **Specification only; implement
+in M0.**
+
+*Input.* The pinned `api-schema.json` and `pin.json`; the schema of the binary actually about
+to be used, obtained by executing `<binary> api schema --json`. Read it from the binary on
+`PATH`/in `vendor/`, not from a cached copy — the point is to catch a user running a
+different herdr.
+
+*Comparison.* Exactly three assertions, in this order:
+
+| # | Assertion | On failure |
+| --- | --- | --- |
+| 1 | `live.protocol === pin.herdr.protocol` | **fatal.** Refuse to start. |
+| 2 | `methodSet(live) ⊇ methodSet(pin)` — every pinned method exists in the live binary | **fatal.** Name the missing methods. |
+| 3 | `methodSet(live) \ methodSet(pin)` is empty | **warn only.** A superset is a newer herdr; log the extra methods so a re-pin gets scheduled. |
+
+*Explicitly not compared:* the **version string**. It is decorative and two different builds
+share it. Never gate on it, never print it as the reason.
+
+*Failure message* must name the drift, not the symptom:
+
+```
+herdr protocol mismatch: pinned 0.8.2-p20 expects protocol 20, binary at
+  <path> reports protocol 22.
+missing methods: (none)   unexpected methods: command.invoke, pane.scroll, +8
+re-pin with: herdr api schema --json > vendor/herdr/<version>-p<protocol>/api-schema.json
+```
+
+*Where it runs.* In CI as a test against the vendored binary; at daemon boot before the first
+API call; and it must be cheap — one subprocess, one JSON parse, no socket. Assertion 3 must
+never block a boot, or every herdr upgrade becomes an outage.
+
+*What it deliberately does not check.* The endpoint protocol generation, which is negotiated
+separately and independently at handshake (§4.3), and the binary checksum, which `pin.json`
+records but which cannot gate a user's own installed herdr.
 
 ### 4.2 Which socket for what
 
+*Corrected 2026-09-04 per PRD-DELTA #6b and #7.*
+
 | Need | Transport | Notes |
 | --- | --- | --- |
-| Create/destroy worktrees, spawn agents, send prompts, query state | `herdr.sock` JSON API | daemon only |
-| Subscribe to agent status, hook reports, git status | `herdr.sock` EventHub subscription | daemon only |
-| Terminal cell content, semantic input | endpoint protocol, generation 1 | renderer utility process only |
+| Create/destroy worktrees, spawn agents, send prompts, query state | `herdr.sock` JSON API | daemon only; one connection per call |
+| Subscribe to agent status | `herdr.sock` `events.subscribe` | daemon only; **one connection per pane** (§7) |
+| Subscribe to workspace/tab/pane lifecycle | `herdr.sock` `events.subscribe` | daemon only; one connection, global |
+| Terminal cell content, semantic input | endpoint protocol, generation 1 | renderer utility process only — **deferred past M0**, see §4.4 |
+| Git status / diff state | **not herdr.** `git` in the worktree, debounced | no such event exists (§7); §1 carve-out |
 | Anything else | — | there is nothing else |
+
+**INVARIANT — the JSON API is one request per connection.** `handle_connection_with_stop`
+reads exactly one line, dispatches, writes one response, and returns
+(`backend/src/api/server.rs:154-300`). There is no multiplexing and no keep-alive. The
+generated client opens a fresh connection per call. Do **not** build a correlation-id
+multiplexer or a connection pool; there is nothing to multiplex.
+
+Exceptions that hold a connection open: `events.subscribe` and `pane.graphics.stream`
+(streaming); `events.wait`, `agent.wait`, `agent.prompt` with `wait`, and
+`pane.wait_for_output` (block, then one response). Each connection is an OS thread on herdr's
+side (`backend/src/api/server.rs:90-100`), so prefer `agent.prompt` + `wait` over
+prompt-then-poll, and keep the steady-state connection count proportional to live panes, not
+to time.
 
 **INVARIANT:** `packages/daemon/src/herdr/**` is the only directory permitted to import the
 generated herdr client or open `herdr.sock`. Enforced by lint (§20).
@@ -217,26 +320,121 @@ Codecs are immutable: `shell.snapshot.v1`, `shell.surface.v1`, `shell.input.sema
 `shell.blob.v1`. New server capabilities arrive as *advertised methods* — a missing method
 disables one action, never the whole connection. Write the transport to degrade that way.
 
-### 4.4 Rendering terminal surfaces — DECISION
+*Corrected 2026-09-04 per PRD-DELTA #3a.* **The stability promise is real; the framing is
+not JSON.**
 
-The renderer consumes `PaneSurfaceFrame` / `PaneSurfacePatch` (already-parsed cell grids from
-herdr's vendored libghostty-vt) and draws them itself. **We do not use xterm.js.**
+What generation 1 actually guarantees: `do_handshake` compares `generation` and the four
+codec names and **never compares herdr build versions**
+(`backend/src/client/handshake.rs:219-232`). An Osade shell built against generation 1 keeps
+working across herdr upgrades. That part of §4.3 was right.
 
-Rationale: herdr has already parsed the bytes with Ghostty's terminal core. Feeding raw bytes
-to xterm.js would mean parsing twice, would need a new herdr API method to stream raw output,
-and would desync herdr's agent detection from what we display.
+What it does not guarantee: the wire. The endpoint rides on `herdr-client.sock`, framed
 
-Renderer requirements:
-- Canvas 2D grid renderer, one draw per animation frame, patches applied to a local cell buffer.
-- Damage tracking: only redraw changed cell rectangles.
-- Must handle: styled cells (fg/bg/bold/italic/underline/inverse), wide (CJK) cells, cursor
-  shape and visibility, selection highlight.
-- Kitty graphics and image protocols: **out of scope for v1**, render a placeholder block.
-- Target: 15 concurrently visible panes at 60fps on a 2021 laptop. Benchmark it; herdr's own
-  rule is that these paths are multiplicative.
+```
+[u32 little-endian length][bincode payload]        backend/src/protocol/wire.rs:1592-1602
+```
 
-Fallback if this proves too slow before M1 ships: negotiate `TerminalAnsi` for a single focused
-pane and pipe to xterm.js. Record the decision if you take it.
+encoding the Rust enums `ClientMessage` / `ServerMessage` under
+`bincode::config::standard()`. Only the handshake and control messages carry JSON, as a
+string inside `EndpointControl { kind, data }`. Everything Osade would render —
+`ClientShellSnapshot`, `PaneSurface(PaneSurfaceFrame)`, `PaneSurfacePatch` — is a native
+bincode variant (`backend/src/protocol/wire.rs:1411`, `:1414`, `:1442`).
+
+Two consequences. A TypeScript client must implement a bincode decoder for the whole
+`ServerMessage` enum. And enum tags are **positional**, so a herdr build that inserts a
+variant shifts every tag after it and the decoder misreads silently. `EndpointControl` is
+append-only for exactly this reason (`wire.rs:1444-1448`); nothing else is. Any transport
+built on this must pin to the vendored herdr (§4.1) and assert a known frame decodes at boot.
+
+This is why the embedded terminal is deferred (§4.4).
+
+### 4.4 Rendering terminal surfaces — DECISION, REVERSED
+
+*Corrected 2026-09-04 per PRD-DELTA #3b and #3c. This section previously specified a canvas
+cell renderer for M0. That decision is reversed; the reasoning that produced it was sound but
+rested on three facts that turned out to be false.*
+
+**DECISION: M0 ships no embedded terminal.** Osade renders the ledger, task detail, diffs,
+verification output and gates. Watching a live terminal is "Open in herdr", which attaches a
+real herdr client to the `osade` session in the user's own terminal.
+
+#### What changed
+
+The old decision rested on: the surfaces arrive as already-parsed cell grids (true), over a
+JSON-ish protocol (**false** — bincode, §4.3), one stream per pane that the renderer can place
+in its own layout (**false**), with a `TerminalAnsi` fallback available if canvas proved slow
+(**false**).
+
+- `PaneSurfaceFrame` (`backend/src/protocol/wire.rs:1213-1225`) is **one composited cell grid
+  for a whole tab**, with `panes: PaneSurfacePane[]` giving each pane's rect inside it. herdr
+  composites; the client blits. There is no "subscribe to pane X's cells". Osade cannot
+  assemble 15 panes from different tasks into its own React grid.
+- Each connection does carry its own workspace/tab projection
+  (`ClientConnection.shell_location`, `backend/src/server/clients.rs:174-175`), so N surfaces
+  means N connections, N server-side render targets, and herdr rendering N tabs per frame —
+  the multiplicative path herdr's own `AGENTS.md` warns about. "15 panes at 60fps" was never
+  15 panes; it was 15 tabs.
+- The `TerminalAnsi` fallback does not exist for endpoint clients. `RenderEncoding`
+  (`wire.rs:41-48`) is negotiated on the **private** `TerminalHello` path;
+  `do_handshake` hardcodes `SemanticFrame` for every endpoint shell
+  (`backend/src/client/handshake.rs:236-238`).
+
+#### Why this does not cost M0 anything
+
+M0's acceptance criterion (§21) is that a row moves `queued → implementing → needs_input →
+awaiting_review` driven entirely by herdr's detection, with nothing polled. That was verified
+end-to-end with **no client attached and no cell ever rendered** (`docs/HERDR-CONTRACT.md`
+§3.3). Terminal pixels were never the thing M0 proves.
+
+What a user actually needs to read during a task is verification output and diffs — files
+Osade owns on disk (`~/.osade/runs/`), not herdr cells.
+
+#### What M0 does instead
+
+- **Ledger, task detail, diff view, verification log tails, gates.** All from the daemon.
+- **Activity line** from `AgentInfo.terminal_title_stripped`, which herdr already reports on
+  every status change — observed as `"Pong response"` after a turn. Free.
+- **On-demand transcript panel** via `pane.read`, the one screen-content method the pinned
+  schema exposes (§4.4.1). On explicit user action or a slow refresh, never a render loop.
+- **"Open in herdr"**, which runs `herdr session attach osade` (or `herdr --session osade`) in
+  the user's terminal. Zero Osade rendering code, full fidelity, real input.
+
+**INVARIANT — attaching a client mutates herdr state that Osade derives status from.**
+`agent_status` is `done` when the pane is idle **and unseen**, and `idle` when it is idle and
+seen (`backend/src/app/api_helpers.rs:100-106`). `seen` is set by `pane.focus`
+(`backend/src/app/api/panes.rs:477`), `agent.focus` (`backend/src/app/agents.rs:82`), and by a
+client reporting terminal focus (`backend/src/server/headless.rs:858`). So opening a task in
+herdr flips `done → idle` and would erase §6 row 10 if Osade treated `idle` as a transition.
+It does not — `idle` is never a transition (§6.1, §7). And **Osade never calls `pane.focus` or
+`agent.focus` on a task lane**, because doing so would silently clear its own
+`awaiting_review`.
+
+#### 4.4.1 `pane.read` — the only screen content in the pinned schema
+
+```
+pane.read  { pane_id, source: "visible"|"recent"|"recent_unwrapped"|"detection",
+             lines?: uint32 (capped at 1000), format: "text"|"ansi", strip_ansi: bool }
+        →  { pane_id, workspace_id, tab_id, source, format,
+             text: string, revision: uint64, truncated: bool }
+```
+
+`agent.read` is the same call keyed by agent `target`. Plain text, or an ANSI byte stream with
+`format:"ansi"` + `strip_ansi:false`. **Not a structured cell grid**: no cursor position, no
+cursor shape, no selection, no scroll offset. `pane.selection.read`, `pane.scroll` and
+`pane.edit_scrollback` are **not in the pinned schema** — they are three of the ten methods in
+the `0.8.2-p20` gap (§4.1).
+
+Use it for a static panel at ≤1 Hz, keyed on `revision` to skip unchanged reads. Do not build
+a render loop on it: one request is one connection is one herdr thread (§4.2), the response is
+the whole screen with no diffing, and there is no cursor to draw.
+
+#### When the embedded terminal comes back
+
+**M1, behind an explicit gate**, and only if the ledger has shipped and users ask for it. The
+work is: a bincode decoder for `ServerMessage` pinned to the vendored herdr, with a boot
+assertion that a known frame decodes; one endpoint connection per visible surface, **LRU-capped
+at 3**; canvas 2D with damage tracking; kitty graphics rendered as a placeholder block. Write
+the ADR when the gate opens, and re-derive the frame-rate target from tabs, not panes.
 
 ### 4.5 Do not violate herdr's own invariants
 
@@ -302,23 +500,45 @@ CREATE TABLE task (
 pure function over the rows below, recomputed at read time (§6). This is AO's central invariant
 and the single most important rule in this document.
 
+*Corrected 2026-09-04 per PRD-DELTA #4, #5 and #11.*
+
 ```sql
 -- last known agent activity, written by the herdr event subscriber
 CREATE TABLE agent_fact (
   task_id       TEXT PRIMARY KEY REFERENCES task(id),
+  herdr_pane_id TEXT,                      -- 'w3:p2'; the subscription key (§7)
   herdr_state   TEXT,                      -- working|blocked|done|idle|unknown
   last_event    TEXT,                      -- to_in_progress|to_review|activity
   last_event_at INTEGER,
-  activity_text TEXT,                      -- "Editing src/foo.ts" — for display only
-  tool_name     TEXT,
-  final_message TEXT,
+  activity_text TEXT,                      -- from AgentInfo.terminal_title_stripped
+  tool_name     TEXT,                      -- null for claude/codex — no source (§7)
+  final_message TEXT,                      -- null for claude/codex — no source (§7)
+  agent_session_id TEXT,                   -- from AgentInfo.agent_session, for resume
   pane_alive    INTEGER NOT NULL DEFAULT 0,
   last_probe_at INTEGER,
   probe_failures INTEGER NOT NULL DEFAULT 0,
   terminated    INTEGER NOT NULL DEFAULT 0,   -- explicit, not inferred
+  state_change_seq INTEGER NOT NULL DEFAULT 0, -- monotonic gate, §5.4.1 — INVARIANT
   controller_generation INTEGER NOT NULL DEFAULT 0
 );
+```
 
+Notes on three columns that will otherwise be got wrong:
+
+- **`activity_text` / `tool_name` / `final_message`.** herdr's bundled hooks report *state*
+  for only six agents (pi, opencode, kimi, kilo, omp, mastracode). For **claude and codex the
+  hook posts a session id and nothing else**, and no bundled asset calls
+  `pane.report_metadata` at all. So `tool_name` and `final_message` have no source for the
+  agents Osade leads with. Treat them as nullable-and-usually-null in v1 and drive the display
+  string from `AgentInfo.terminal_title_stripped`, which herdr reports on every status change.
+- **`state_change_seq`.** The monotonic write gate. See §5.4.1.
+- **`herdr_workspace_id`** on `task` is a durable key: it is a stored field
+  (`backend/src/app/ids.rs:15-17`), stable when other workspaces close and across a herdr
+  restart. Two cautions — `WorkspaceInfo.number` **does** renumber, so never key on it; and
+  `parse_workspace_id` has a positional fallback for bare integers
+  (`backend/src/app/ids.rs:60-67`), so always send the full `wN` form herdr returned.
+
+```sql
 CREATE TABLE verify_run (
   id            TEXT PRIMARY KEY,
   task_id       TEXT NOT NULL REFERENCES task(id),
@@ -445,6 +665,46 @@ update, the mutation did not go through the database, and that is the bug. Clien
 
 Retain the last 50k rows; prune on a timer.
 
+### 5.4.1 The monotonic fact gate — INVARIANT
+
+*Added 2026-09-04 per PRD-DELTA #5.*
+
+§5.4 governs Osade's *own* event path, which is exactly-once and ordered. herdr's is neither.
+
+herdr's `EventHub` is a **512-entry in-memory ring buffer** (`backend/src/api/event_hub.rs:13`,
+`:22`) polled per subscription. Two verified behaviours:
+
+1. **Replay on connect.** A fresh `events.subscribe` connection immediately receives a burst
+   describing state that existed before it connected — including `workspace_created` for a
+   workspace that had already been *closed*. Reproduced on two independent connections.
+2. **Silent loss.** More than 512 events while disconnected and the overflow is dropped with
+   no gap marker. **The delivered envelope carries no sequence number.**
+
+So a naive subscriber can write a replayed `working` on top of a live `done`, and can miss a
+transition entirely without knowing.
+
+> **INVARIANT — every agent fact write is gated on a monotonic counter, and every
+> (re)connect reconciles against a snapshot.**
+>
+> 1. Each write carries the counter from its payload: `AgentInfo.state_change_seq`, or
+>    `PaneInfo.revision` where that is what the event gives. A write whose counter is **not
+>    strictly greater** than the stored `agent_fact.state_change_seq` is **dropped**, not
+>    merged.
+> 2. The counter and the fact it guards are written in **one transaction**. A fact stored
+>    without advancing the counter, or a counter advanced without the fact, both reintroduce
+>    the bug.
+> 3. On every subscriber connect **and reconnect**, the daemon calls `session.snapshot`,
+>    reconciles all live panes against it, and only then trusts the stream.
+> 4. Reconciliation writes go through the database like every other write. §5.4 is not
+>    weakened: there is still exactly one path from a mutation to the UI.
+
+This is a *read* of herdr on reconnect, not the polling §5.4 forbids: it is bounded, one call
+per connection event, and it never drives the UI directly.
+
+The same discipline covers §5.2's failed-probe rule from the other side. A dropped event is
+not evidence that an agent died, exactly as a failed probe is not. Neither may set
+`terminated`.
+
 ### 5.5 The contract package — INVARIANT
 
 `packages/contract/` holds Zod schemas for **everything crossing a process boundary**: daemon↔
@@ -494,6 +754,16 @@ Notes that will otherwise be got wrong:
   and does not gate.
 - `probe_failures > 0` appears nowhere in this table. It surfaces as a small degraded-confidence
   badge in the UI, and nothing else.
+- *Corrected 2026-09-04 per PRD-DELTA #11.* **A herdr restart is not a task death.** herdr
+  restores workspaces, tabs and panes with the same ids and cwd, but **not the agent
+  process**: the pane comes back as a bare shell with `agent = null` and
+  `agent_status = unknown`. Row 13 must therefore read *`agent.pane_alive === 0` **or** the
+  pane exists with no agent bound* → `queued`, so a restored-but-unlaunched task sorts as
+  work to start rather than falling through to row 14 `idle`. `terminated` stays untouched —
+  §5.2's rule holds: only an explicit process exit or an explicit user action sets it. §8.2
+  owns the relaunch.
+- *Per PRD-DELTA #4.* Row 10's trigger is `last_event === 'to_review'`, which now comes from
+  herdr's `done` and **only** from `done`. See §6.1.
 - Never write a helper that persists the result of `deriveStatus`. If you find yourself wanting
   to index on status, index on the underlying facts instead.
 
@@ -509,6 +779,31 @@ Every agent's richer event vocabulary is mapped down to these by its adapter. `a
 **never** a transition; it only updates `activity_text` / `tool_name`. Adding a fourth event
 requires changing this document first.
 
+*Corrected 2026-09-04 per PRD-DELTA #9.* The mapping from herdr's five statuses onto these
+three events — this replaces the collapsed `done`/`idle` row that appeared in §7:
+
+| `AgentStatus` | Osade event | Why |
+| --- | --- | --- |
+| `working` | `to_in_progress` | |
+| `done` | `to_review` | the turn finished — this is the needs-you signal |
+| `blocked` | *none* — sets `herdr_state` only | drives §6 row 4 `needs_input` |
+| `idle` | *none* — sets `herdr_state` only | **never a transition**, in either direction |
+| `unknown` | *none* — recorded, not acted on | |
+
+`done` and `idle` are not interchangeable, and the difference is not about the agent.
+`agent_status` is `done` when the pane is idle **and unseen**, `idle` when it is idle and
+**seen** (`backend/src/app/api_helpers.rs:100-106`). So a completed turn reads `done` until
+something marks the pane seen, at which point herdr emits `idle` for the same agent in the
+same state.
+
+That is why `idle` must be inert. If `idle` mapped to `to_in_progress`, opening a task in
+herdr would silently clear its `awaiting_review`; if it mapped to `to_review`, a freshly
+launched, never-prompted agent would land in the needs-you set immediately. Both were live
+possibilities in the original table. A task leaves `queued` on `pane_alive` and a bound agent
+(§6 row 13), not on an `idle` event.
+
+See §4.4 for the corollary: Osade never calls `pane.focus` or `agent.focus` on a task lane.
+
 The transition reducer is pure, in `packages/daemon/src/domain/agent-reducer.ts`, and takes
 `(facts, event) -> factPatch`. No I/O in it.
 
@@ -516,31 +811,112 @@ The transition reducer is pure, in `packages/daemon/src/domain/agent-reducer.ts`
 
 ## 7. Where agent state actually comes from
 
-**Do not build a parallel hook system.** herdr already installs per-agent hook scripts
-(`src/integration/assets/<agent>/`) for Claude Code, Codex, pi, opencode, Kimi and others,
-which report authoritative state back through its JSON API as `HookStateReported`,
-`HookMetadataReported`, and `AgentSessionReported`. Panes identify themselves via
-`HERDR_PANE_ID` / `HERDR_TAB_ID` / `HERDR_WORKSPACE_ID`, injected at spawn.
+*Corrected 2026-09-04 per PRD-DELTA #4, #6, #6a, #6b and #9. Four of the seven event names
+this section originally used do not exist. The corrected surface, with payload shapes and
+citations, is `docs/HERDR-CONTRACT.md` §7.*
 
-Osade's subscriber (`packages/daemon/src/herdr/event-subscriber.ts`) subscribes to the herdr
-EventHub and maps:
+**Do not build a parallel hook system.** herdr installs per-agent hook scripts
+(`backend/src/integration/assets/<agent>/`) and panes identify themselves via
+`HERDR_ENV`, `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_PANE_ID`, `HERDR_TAB_ID` and
+`HERDR_WORKSPACE_ID`, injected at spawn (`backend/src/pane.rs:115-137`) — that much was right.
+
+But the hooks report less than this section assumed. **The three names used here —
+`HookStateReported`, `HookMetadataReported`, `AgentSessionReported` — are not events.** They
+are *inbound methods* the hook scripts call (`pane.report_agent`,
+`pane.report_metadata`, `pane.report_agent_session`), and what reaches a subscriber is the
+status change herdr derives from them.
+
+### 7.1 What the hooks actually report
+
+| Reports state (`pane.report_agent`) | Reports a session id only | Nothing |
+| --- | --- | --- |
+| pi, opencode, kimi, kilo, omp, mastracode | **claude**, **codex**, cursor, copilot, devin, droid, grok, antigravity | hermes, qodercli, qwen |
+
+**No bundled asset calls `pane.report_metadata` at all.** For claude and codex the hook fires
+once on `SessionStart` and posts a session id and transcript path — nothing more. Their status
+therefore comes **entirely from herdr's screen-detection manifests**, which the live test
+showed carrying the full lifecycle correctly (`blocked → idle → working → done`) with no
+flapping. See §8.1 for the capability consequence.
+
+### 7.2 The subscriber is an N+1 connection manager — INVARIANT
+
+`events.subscribe` has two families of subscription
+(`backend/src/api/schema/events.rs:16-85`), and agent status is only in the second:
+
+- **Global, no parameters:** `workspace.*`, `worktree.*`, `tab.*`, `pane.created`,
+  `pane.closed`, `pane.updated`, `pane.focused`, `pane.moved`, `pane.exited`,
+  `pane.agent_detected`, `layout.updated`.
+- **Pane-scoped, `pane_id` required:** `pane.agent_status_changed`, `pane.output_matched`,
+  `pane.scroll_changed`. Omitting `pane_id` is a hard `invalid_request`.
+
+**`pane.updated` is not a status feed.** It is emitted only on agent-name change and a few
+unrelated actions (`backend/src/app/api.rs:631-633` and four other call sites), while
+`pane.agent_status_changed` is emitted on every transition (`backend/src/app/api.rs:647-673`).
+Verified: a global `pane.updated` subscription held across a complete `working → done` turn
+received **zero** events for that turn.
+
+> **INVARIANT — `packages/daemon/src/herdr/event-subscriber.ts` is a connection manager, not
+> a socket.** It holds **one** global lifecycle connection plus **one connection per live
+> agent pane**. A pane-status connection is opened when `pane.created` or a successful
+> `agent.start` yields a pane id, and closed on `pane.exited` / `pane.closed`. Steady-state
+> connection count is proportional to live panes; ~15 concurrent tasks is ~16 connections,
+> each an OS thread on herdr's side.
+
+Every write from either connection passes the monotonic gate in §5.4.1, and every connect and
+reconnect reconciles against `session.snapshot` first.
+
+### 7.3 The corrected mapping
 
 | herdr event | Osade fact write |
 | --- | --- |
-| `PaneAgentStatusChanged` → `working` | `herdr_state='working'`, event `to_in_progress` |
-| `PaneAgentStatusChanged` → `blocked` | `herdr_state='blocked'` (drives `needs_input`) |
-| `PaneAgentStatusChanged` → `done`/`idle` | `herdr_state=...`, event `to_review` |
-| `HookMetadataReported` | `activity_text`, `tool_name`, `final_message` — event `activity` |
-| `AgentSessionReported` | agent session id binding, for resume |
-| `PaneDied` / process exit | `pane_alive=0`; `terminated=1` only on explicit exit |
-| `GitStatusRefreshed` | triggers a diff-stat refresh for the task |
+| `pane.agent_status_changed` → `working` | `herdr_state='working'`, event `to_in_progress` |
+| `pane.agent_status_changed` → `blocked` | `herdr_state='blocked'` (drives `needs_input`) |
+| `pane.agent_status_changed` → `done` | `herdr_state='done'`, event `to_review` |
+| `pane.agent_status_changed` → `idle` | `herdr_state='idle'` — **no transition** (§6.1) |
+| `pane.agent_status_changed` → `unknown` | `herdr_state='unknown'` — no transition |
+| its `title` / `display_agent` / `state_labels` fields | `activity_text` — event `activity` |
+| `pane.agent_detected` | binds `agent` label to the pane; `released` clears it |
+| `pane.exited` | `pane_alive=0`; `terminated=1` only on an explicit process exit |
+| `AgentInfo.agent_session` (via snapshot / `agent.get`) | `agent_session_id`, for resume |
 
-**If a needed signal is missing from herdr,** extend herdr properly: a new declarative rule in
-`distribution/agent-detection/*.toml` (versioned, remotely updatable) or a new `Method`/event in
-`src/api/schema/`. Do not screen-scrape terminal output from Osade. herdr's detector already
-reads the bottom buffer rather than the visible viewport (users scroll) and debounces
-working→idle across 3 confirmations over 700ms so a momentarily quiet agent does not flicker.
+Payload of the one that matters, as observed live:
+
+```json
+{"event":"pane.agent_status_changed",
+ "data":{"pane_id":"w3:p2","workspace_id":"w3","agent_status":"working","agent":"claude"}}
+```
+
+with optional `title`, `display_agent`, `state_labels` when non-empty.
+
+### 7.4 Names this section used that do not exist
+
+| Was written as | Reality |
+| --- | --- |
+| `HookStateReported` | inbound method `pane.report_agent`; surfaces as `pane.agent_status_changed` |
+| `HookMetadataReported` | inbound method `pane.report_metadata`; nothing bundled calls it |
+| `AgentSessionReported` | inbound method `pane.report_agent_session`; surfaces as `AgentInfo.agent_session` |
+| `PaneDied` | the event is `pane.exited`, payload `{pane_id, workspace_id}` |
+| `GitStatusRefreshed` | **does not exist, under any name.** `EventKind` is closed at `backend/src/api/schema/events.rs:194-221` |
+
+**Git status is Osade's.** There is no git event to subscribe to, so the daemon runs
+`git -C <worktree> status --porcelain` / `diff --stat` itself, debounced, triggered by
+verification runs and by `pane.agent_status_changed → done`. This is the §1 carve-out, not a
+violation of it: herdr owns worktree *lifecycle*, not reading a directory.
+
+### 7.5 If a signal is genuinely missing
+
+Extend herdr properly: a new declarative rule in `backend/distribution/agent-detection/*.toml`
+(21 agents, versioned, remotely updatable via `index.toml`), or a new `Method`/event in
+`src/api/schema/`. Do not screen-scrape terminal output from Osade. herdr's detector reads the
+bottom buffer rather than the visible viewport (users scroll) and debounces working→idle
+across 3 confirmations over 700ms so a momentarily quiet agent does not flicker.
 Reimplementing that badly is a guaranteed source of flapping cards.
+
+The one supported exception, **M2 or later**: if Osade wants tool-level activity for Claude
+Code, install an *additional* Claude Code hook that calls `pane.report_metadata` using
+`HERDR_PANE_ID` and `HERDR_SOCKET_PATH` from the environment. That is herdr's own documented
+inbound API, not a parallel system. Token limits apply: ≤16 keys per patch, ≤32 stored, key
+`^[A-Za-z0-9_-]{1,32}$` (`backend/src/api/schema/common.rs:3-23`).
 
 ---
 
@@ -576,6 +952,23 @@ supported — flags change):
 | `gemini` | `gemini` | `--yolo` | — | — | varies |
 | `opencode` | `opencode` | — | — | — | plugin file |
 
+*Corrected 2026-09-04 per PRD-DELTA #4 and #8.*
+
+**`binary` is advisory.** herdr picks the executable, not Osade:
+`interactive_agent_executable` maps a `kind` to a fixed name
+(`backend/src/detect/mod.rs:149-181`) — `claude`, `codex`, `gemini`, `kiro-cli`, `agy`,
+`cursor-agent(.cmd)`, and so on. Keep the field for **probing** and for a useful "agent not
+installed" error; never pass it to herdr. The `kind` string is what herdr accepts, and the
+pinned set is:
+
+```
+pi codex claude gemini cursor devin agy cline omp mastracode opencode copilot
+kimi kiro droid amp grok hermes kilo qodercli qwen maki
+```
+
+(§8.1's table wrote `kiro` as `kiro-cli chat`. The kind is `kiro`, the executable herdr runs
+is `kiro-cli`, and `chat` is an argument.)
+
 **INVARIANT — capabilities, not identity checks.** Branch on
 `entry.capabilities.includes('plan-mode')`, never on `agentId === 'claude'`. AO's model:
 harnesses opt into behavior they can prove they support, rather than being flattened to a
@@ -589,34 +982,99 @@ lowest common denominator. Capability list for v1:
 An agent without `hook-reporting` still works — it just relies on herdr's screen-manifest
 detection and gets a lower-confidence badge in the UI.
 
+**`hook-reporting` is set for `pi`, `opencode`, `kimi`, `kilo`, `omp`, `mastracode` and
+cleared for everything else — including `claude` and `codex`** (§7.1). This is exactly the
+case the capability was designed for, and it is not a lower tier: the live test showed
+screen-manifest detection carrying Claude Code's whole lifecycle correctly. What the two
+leading agents lose is `tool_name` and `final_message`, not status.
+
 **PATH matters.** Probe binaries with direct PATH checks and spawn directly. Never shell out to
 `zsh -i` to find a binary: with heavy conda/nvm init that freezes the runtime when several
-tasks start at once. This bit Kanban; do not rediscover it.
+tasks start at once. This bit Kanban; do not rediscover it. Probing is now the *only* reason
+Osade cares about the binary path — herdr resolves it independently, so a probe that passes
+while herdr's spawn fails means the executable is not on the **server's** PATH.
 
 ### 8.2 Launch sequence
+
+*Corrected 2026-09-04 per PRD-DELTA #8 and #11. The old step 7 — "build argv … spawn in the
+agent lane" — is not possible: no pane-creating method accepts a command.*
+
+**How `agent.start` actually works.** It does not spawn a process. It resolves `kind` to a
+fixed executable, appends `args` (rejecting control characters), shell-quotes the line, and
+**types it into an existing idle shell pane**, then waits for its detector to confirm the
+agent is interactive (`backend/src/app/agents.rs:145-225`). Three consequences shape the
+sequence below: the lane must exist and be at a shell prompt first; **environment cannot be
+set at `agent.start`** and must be set when the workspace or tab is created; and a pane hosts
+at most one agent.
 
 `packages/daemon/src/domain/launch-task.ts`:
 
 1. Resolve agent: `task.agent_id ?? repo.default_agent ?? config.selected_agent`. On resume,
    the previously used agent wins so a restored task comes back on the same runtime.
-2. Ensure worktree (§9).
-3. Ask herdr to create a workspace rooted at the worktree path; record `herdr_workspace_id`.
-4. Create lanes (herdr tabs): `agent`, `shell`. `verify` is created on first verification run.
-5. Render the launch context (§15.4) to `<worktree>/.osade/CONTEXT.md`.
-6. Build argv from the catalog entry + selected mode + system-prompt injection.
-7. Spawn in the `agent` lane via the herdr JSON API.
+2. `git -C <repo> worktree prune`, then ensure worktree (§9), then mirror gitignored-but-needed
+   paths into it — **all three before anything is spawned**.
+3. `worktree.create` gives the worktree **and** its workspace in one call; record
+   `herdr_workspace_id`. The root pane is the `shell` lane.
+4. Create the `agent` lane with `tab.create { workspace_id, label: "agent", focus: false,
+   env: { OSADE_TASK_ID, … } }`. **This is the only opportunity to set environment** — see
+   above. `verify` is created on first verification run, with the same env.
+5. Render the launch context (§13.5) to `<worktree>/.osade/CONTEXT.md`.
+6. Open the pane-status subscription for the new pane (§7.2) **before** starting the agent, so
+   the launch transition is not missed.
+7. `agent.start { name, kind, pane_id, args, timeout_ms }`, where `args` carries everything
+   from the catalog entry — mode args and system-prompt injection alike.
 8. Capture a `turn_checkpoint` with trigger `launch`. Best-effort — **a checkpoint capture
    failure never fails a launch.**
+
+**Error codes from step 7 need distinct handling; only the first is routine**
+(`backend/src/app/agents.rs:228-260`):
+
+| Code | Meaning | Response |
+| --- | --- | --- |
+| `agent_not_ready` | started, but blocked or not interactive within `timeout_ms` | usually the trust prompt — §8.3, then re-wait |
+| `agent_pane_busy` | pane already hosts an agent, or is not at a shell prompt | fresh pane, or `pane.close` first |
+| `unsupported_agent_kind` | `kind` not in the pinned set | catalog bug; fail the launch |
+| `invalid_agent_argument` | control char in an arg, or unquotable for the shell | catalog or context bug; fail the launch |
+| `agent_pane_not_found` / `agent_pane_unavailable` | bad pane id, dead terminal | reconcile against `session.snapshot` (§5.4.1) |
+| `invalid_agent_name` / `duplicate_agent_name` | name rules | derive the name from `task.id` |
+
+### 8.2.1 Relaunch after a herdr restart
+
+herdr restores panes but not agent processes (§6). On reconnect, for every task whose
+workspace exists and whose pane has no bound agent:
+
+1. Reconcile from `session.snapshot` first — do not act on an event alone.
+2. Re-run `agent.start` in the restored pane. It is back at a shell prompt, so
+   `agent_pane_busy` will not fire.
+3. Use the catalog's `resumeArgs` plus the `agent_session_id` recorded in `agent_fact`, when
+   the agent has the `resume` capability. Without it, relaunch cold with the task intent.
+4. Never set `terminated`. The task is `queued`, not `stopped`.
 
 ### 8.3 First-run trust prompts
 
 Claude and Codex show a "do you trust this folder?" prompt, and Osade's cwd is a freshly created
-worktree every single time, so this fires constantly. herdr's `PaneOutputMatched` event plus a
-detection manifest rule is the right place to catch it. Auto-confirm on a short delay, then
-clear the match buffer so stale trust text cannot re-match later heuristics.
+worktree every single time, so this fires constantly.
+
+*Confirmed 2026-09-04 per PRD-DELTA #13.* This fired on the very first launch into a fresh
+worktree: `agent.start` returned `agent_not_ready` and herdr's detector classified the pane
+`blocked` — correctly, with no Osade screen-scraping. The verified recipe, entirely within
+herdr's API:
+
+```
+pane.wait_for_output { pane_id, source: "visible", timeout_ms: 15000,
+                       match: { type: "substring", value: "Is this a project you created" } }
+pane.send_keys       { pane_id, keys: ["Down"] }
+pane.send_keys       { pane_id, keys: ["Enter"] }
+agent.wait           { target, until: ["idle"], timeout_ms: 30000 }
+```
+
+**Match the specific prompt; never auto-confirm a `blocked` state generically.** Any other
+`blocked` is §6 row 4 — the user is being asked something, and answering it for them is the
+one thing this product must not do.
 
 If herdr's manifest can't express the match, add a rule to
-`distribution/agent-detection/*.toml` upstream rather than adding output scanning to Osade.
+`backend/distribution/agent-detection/*.toml` upstream rather than adding output scanning to
+Osade.
 
 ---
 
@@ -626,21 +1084,40 @@ herdr already makes git worktrees first-class workspace containers, with creatio
 removal guarded against active agent panes (`src/worktree.rs`, `src/workspace/git/`). **Osade
 calls herdr for worktree lifecycle. It does not shell out to `git worktree` itself.**
 
+*Corrected 2026-09-04 per PRD-DELTA #10. Three of these six rules are not herdr's and must be
+implemented by Osade; the annotations say which.*
+
 What Osade owns is the *policy*, and these rules are hard-won — they come from Kanban destroying
 user work by getting them wrong:
 
 1. **An existing worktree is authoritative.** Never compare worktree HEAD against a moved base
    branch and recreate. That destroys task progress. Only create *missing* worktrees.
+   — **herdr's.** `worktree.open` on an existing path returns `already_open` and never
+   recreates.
 2. Creation is serialized by a repo-level lock, with a double-check inside the lock.
+   — **Osade's.** herdr has no cross-call lock; two concurrent `worktree.create` calls on one
+   repo race.
 3. Run `git worktree prune` before `add`: an interrupted removal leaves a registration behind
    and `add` then fails with "missing but already registered."
-4. Create `--detach` at the resolved base commit (`task.base_sha`), then create the branch. A
-   pinned base means a moving `main` cannot silently change what an agent is building against.
+   — **Osade's.** herdr never prunes (`backend/src/worktree.rs:238-320`). This failure *will*
+   happen. §1's carve-out exists for this line.
+4. The worktree is created on the resolved base commit (`task.base_sha`), then the branch is
+   created there. A pinned base means a moving `main` cannot silently change what an agent is
+   building against.
+   — **herdr's, by outcome.** It runs `git worktree add -b <branch> <path> <base>` for a new
+   branch and `git worktree add <path> <branch>` for an existing one. This section previously
+   specified `--detach`-then-branch; that mechanism is not what herdr does and Osade cannot
+   control it. Verified: `base: 089a586` produced a worktree on the new branch at exactly that
+   commit, which is what the rule is for.
 5. **Mirror gitignored-but-needed paths** into the worktree: `.env`, `.env.local`, local tool
    configs, and anything in `repo.mirror_paths`. Symlink where possible, copy where the tool
    resolves symlinks. Without this, half of real repos won't even boot in a worktree.
+   — **Osade's.** No herdr concept. Must run after `worktree.create` returns and **before**
+   `agent.start` (§8.2 step 2).
 6. Removal requires: no live pane in the task's herdr workspace, no uncommitted changes, or an
    explicit force with a typed confirmation.
+   — **herdr's.** `worktree.remove` refuses a dirty checkout without `force`
+   (`backend/src/worktree.rs:214`) and recovers from leftover checkouts (`:343`).
 
 Path layout: `~/.osade/worktrees/<repo_slug>/<task_id>/`.
 
@@ -1009,31 +1486,52 @@ apps/desktop/src/
 │   ├── secrets.ts             safeStorage: GitHub token, model API keys
 │   ├── oauth.ts               GitHub device flow / OAuth relay + deep-link handler
 │   ├── menus.ts, updater.ts
-│   └── surface-host.ts        creates the utilityProcess + MessageChannelMain
-├── surface/
-│   └── index.ts               utilityProcess: herdr endpoint socket, frame decode,
+│   └── surface-host.ts        M1 — creates the utilityProcess + MessageChannelMain
+├── surface/                   M1 — deferred, see §4.4
+│   └── index.ts               utilityProcess: herdr client socket, bincode frame decode,
 │                              posts PaneSurfaceFrame/Patch over the MessagePort
 ├── preload/
 │   └── index.ts               contextBridge: typed daemon RPC handle + port receipt
 └── renderer/
     ├── App.tsx                composition root only
-    ├── runtime/               trpc client, ws subscription, surface port hook
+    ├── runtime/               trpc client, ws subscription, (M1: surface port hook)
     ├── hooks/                 where behavior lives — not components
-    ├── surface/               canvas cell renderer, damage tracking, input encoding
+    ├── surface/               M1 — canvas cell renderer, damage tracking, input encoding
     ├── state/                 ledger view state, filters, selection (client-only)
     └── components/            mostly presentational
 ```
+
+*Corrected 2026-09-04 per PRD-DELTA #3.* Everything marked M1 is out of M0 scope: §4.4 defers
+the embedded terminal, so M0 ships no utility process, no `MessageChannelMain`, and no cell
+renderer. `supervisor/herdr.ts`'s "version guard" is now the boot drift check of §4.1.1 — it
+compares protocol and method set, never the version string.
 
 **INVARIANT — the renderer is never the source of truth.** It renders streamed state. It never
 computes status (that is §6, in the daemon), never caches a session, never decides a gate. On
 reconnect it discards local state and takes the snapshot.
 
-**Startup order**, and it matters:
+**Startup order**, and it matters.
+*Corrected 2026-09-04 per PRD-DELTA #12 and #1.*
 
 1. `app.setPath('userData', ...)` — before anything else touches disk
-2. adopt-or-spawn herdr server on the `osade` named session; wait for `Ping`
-3. spawn the daemon; wait for its ready handshake (never a fixed sleep)
-4. create the window; renderer connects to daemon, then requests a surface port
+2. Run the boot drift check (§4.1.1) against the herdr binary about to be used. Fatal on
+   protocol or missing-method mismatch, **before** anything is spawned.
+3. Adopt-or-spawn the herdr server on the `osade` named session, then wait for `ping`.
+   - `HERDR_SESSION=osade` on the server process and on every subsequent call. Verified to run
+     concurrently with a user's own `default` session — separate sockets, separate
+     `session.json`, no interference (`backend/src/session.rs:10-11`, `:157-185`).
+   - **Spawn detached, copying herdr's own recipe** (`backend/src/server/autodetect.rs:188-233`):
+     `herdr server` with stdin/stdout/stderr null and `DETACHED_PROCESS` on Windows /
+     `setsid` on Unix. Without this the server dies with its parent, and "agents survive the
+     app quitting" quietly stops being true. (`ping`'s
+     `capabilities.detached_server_daemon` reports whether *this* server was started that
+     way — it is a status report, not a platform limit.)
+   - **`env_remove('HERDR_STARTUP_CWD')`.** If it is set and the session has no workspaces,
+     herdr creates a workspace at that cwd on boot
+     (`backend/src/server/headless/bootstrap.rs:89-117`) and Osade inherits a stray workspace
+     it did not create.
+4. Spawn the daemon; wait for its ready handshake (never a fixed sleep)
+5. Create the window; renderer connects to the daemon. **No surface port in M0** (§4.4).
 
 **Shutdown:** quitting the window detaches. It does **not** stop herdr and does **not** stop the
 daemon. Agents keep running. Add an explicit "Stop everything" menu item and a tray state so
@@ -1044,29 +1542,51 @@ Do not build it at install time — herdr requires Zig 0.15.2 as a hard build de
 `libghostty-vt`, which is not an acceptable user prerequisite. Pin the version and verify a
 checksum at boot.
 
-### 18.2 Surface transport
+### 18.2 Surface transport — DEFERRED PAST M0
+
+*Corrected 2026-09-04 per PRD-DELTA #3. §4.4 reverses the embedded-terminal decision; this
+section is the M1 design, kept because it is still correct for when the gate opens.*
+
+M0 ships no `surface/` utility process and no `MessageChannelMain`. The `apps/desktop/src/`
+tree in §18.1 drops `surface/` and the renderer's `surface/` directory until then.
+
+When it comes back:
 
 ```
-herdr endpoint socket
-   └─ utilityProcess: handshake (advertise gen 1), negotiate shell.snapshot.v1 +
-      shell.surface.v1 + shell.input.semantic.v1, decode frames
+herdr client socket  ([u32LE len][bincode] frames — §4.3)
+   └─ utilityProcess: EndpointControl handshake (advertise gen 1), negotiate
+      shell.snapshot.v1 + shell.surface.v1 + shell.input.semantic.v1,
+      decode ServerMessage frames
         └─ port.postMessage(frame)  ── MessageChannelMain ──► renderer
              └─ cell buffer + damage rects → canvas draw on rAF
 ```
+
+Three things §18.2 originally assumed that are false, and which the M1 design must carry:
+
+- The frames are **bincode**, not JSON (§4.3). The utility process owns a decoder pinned to
+  the vendored herdr, with a boot assertion that a known frame decodes.
+- A connection delivers **one composited tab**, not one pane (§4.4). So there is one
+  connection per visible *surface*, LRU-capped at 3, each pinned to its task's workspace and
+  tab via the connection-local projection (`backend/src/server/clients.rs:174-175`).
+- Because a connection is per-tab, the "several viewers of one PTY" case that motivated the
+  backpressure design mostly disappears — a ledger preview and a detail view of the same task
+  are the same tab and should share one connection rather than open two.
 
 Input goes the other way as `shell.input.semantic.v1`. Handle: kitty keyboard protocol,
 bracketed paste, dead-key composition. herdr handles these explicitly on its side; the client
 must not mangle them on the way in.
 
-Backpressure: one PTY, potentially several viewers (a pane visible in the ledger preview and in
-the detail view). Track per-viewer acknowledged bytes; pause the shared stream when the slowest
-viewer exceeds a high-water mark and resume only when the *last* slow viewer drains below the
-low-water mark. Kanban's numbers are a reasonable starting point: 16 KiB high, 4 KiB low, 4ms
-batch interval with a fast path for chunks under 256 B.
+Backpressure, where viewers do diverge: track per-viewer acknowledged bytes; pause the shared
+stream when the slowest viewer exceeds a high-water mark and resume only when the *last* slow
+viewer drains below the low-water mark. Kanban's numbers are a reasonable starting point:
+16 KiB high, 4 KiB low, 4ms batch interval with a fast path for chunks under 256 B.
 
 **Terminals are parked, not unmounted.** Keep surface canvases in a hidden root and move them,
 so switching tasks never drops or re-subscribes a session. Kanban learned this; it is not
 optional.
+
+**And note §4.4's INVARIANT:** attaching any client marks panes seen, which flips `done` to
+`idle`. That is safe only because `idle` is inert (§6.1). Do not change that when this lands.
 
 ---
 
@@ -1179,12 +1699,24 @@ osade/
 │   │       └── db/                sqlite, migrations, change_log, cdc poller
 │   ├── cli/                       `osade` verbs (humans and agents, same surface)
 │   └── skill-assets/              using-osade skill, installed to ~/.osade/skills
-├── vendor/herdr/                  pinned prebuilt binaries + checksums + api schema
+├── backend/                       herdr source. READ-ONLY reference for behaviour.
+│                                  Never edited, never a codegen input (§4.1).
+├── vendor/herdr/<ver>-p<proto>/   THE pinned target: api-schema.json, methods.txt,
+│                                  pin.json, and the prebuilt binary per platform
 ├── patches/                       herdr patches, each with a rationale + upstream link
 └── docs/
-    ├── PRD.md                     this file
+    ├── OSADE.md                   this file
+    ├── HERDR-CONTRACT.md          the verified herdr surface, with citations
+    ├── PRD-DELTA.md               where this file was wrong, and why
     └── adr/                       one file per DECISION taken during the build
 ```
+
+*Corrected 2026-09-04 per PRD-DELTA #14.* `vendor/herdr/` is keyed by
+`<version>-p<protocol>`, not by version alone, because the version string is not a contract
+(§4.1). herdr's own repo furniture — its `AGENTS.md`, `.github/`, `.agents/skills/herdr-*` —
+belongs under `backend/`, not at the Osade root, where it would be read as Osade's own
+guidance. CLAUDE.md's rule that herdr's `AGENTS.md` governs `backend/` only depends on it
+actually living there.
 
 ### 20.1 Lint-enforced, not conventions
 
@@ -1234,16 +1766,31 @@ Each milestone ends in a demo. Thin end-to-end slices, not layers.
 
 Prove the three-process architecture works before building any product on it.
 
-- [ ] Vendor herdr binary + api schema; generate the typed client; version guard
-- [ ] Daemon: sqlite + migrations + change_log + CDC + ws snapshot/push
-- [ ] Electron: userData redirect, supervisor, utilityProcess surface transport, canvas renderer
-- [ ] One task: create → worktree via herdr → spawn Claude Code in an agent lane → surface renders
-- [ ] `deriveStatus` implemented for rows 4, 10, 11, 13, 14 only
-- [ ] herdr event subscriber writing `agent_fact`
+*Corrected 2026-09-04 per PRD-DELTA #15.*
 
-**Acceptance:** type a prompt, watch Claude Code work in an isolated worktree inside the
-Electron window, and see the row move `queued → implementing → needs_input → awaiting_review`
-driven entirely by herdr's detection, with nothing polled and no status column in the database.
+- [ ] Vendor the herdr binary into `vendor/herdr/<version>-p<protocol>/`; generate the typed
+      client **from the pinned `api-schema.json`, never from `backend/`**; implement the boot
+      drift check (§4.1.1) — protocol and method set, never the version string
+- [ ] Daemon: sqlite + migrations + change_log + CDC + ws snapshot/push
+- [ ] herdr event subscriber as an **N+1 connection manager** (§7.2), with the monotonic
+      `state_change_seq` gate and `session.snapshot` reconciliation on every (re)connect
+      (§5.4.1)
+- [ ] `deriveStatus` implemented for rows 4, 10, 11, 13, 14 only
+- [ ] Electron: userData redirect; supervisor with detached herdr spawn and
+      `HERDR_STARTUP_CWD` cleared (§18.1); ledger, task detail, diff view, verification log
+      tail. **No utility process, no canvas renderer** (§4.4)
+- [ ] One task: create → prune + `worktree.create` + mirror → `tab.create` with env →
+      subscribe → `agent.start` → resolve the trust prompt → `agent.prompt`
+
+**Acceptance:** type a prompt and see the row move `queued → implementing → needs_input →
+awaiting_review` driven entirely by herdr's detection, with nothing polled and no status
+column in the database. Watching the terminal is "Open in herdr" (§4.4); the embedded surface
+is M1, behind a gate.
+
+This acceptance criterion is unchanged in substance — it never depended on rendering a cell.
+The full path was already verified end-to-end against a live herdr with no client attached
+(`docs/HERDR-CONTRACT.md` §3.3); M0 is building the daemon and UI around a spine that is known
+to work.
 
 ### M1 — Lifecycle, verification, gates
 
@@ -1334,9 +1881,16 @@ Instrument from M1. These are the only numbers that matter.
    disclosure line non-editable.
 4. **Windows.** herdr supports it (ConPTY, named pipes, no live handoff). Osade v1 could be
    Unix-only to halve the surface. Decide before M0 ends, because the supervisor and socket
-   code differ.
-5. **Surface renderer performance.** If the canvas renderer cannot hold 15 panes at 60fps by
-   the end of M0, take the `TerminalAnsi` + xterm.js fallback (§4.4) and write the ADR.
+   code differ. *2026-09-04: the whole M0 path is verified working on Windows 11 —
+   named-pipe JSON API from Node, headless server, worktrees, `agent.start`, status stream.
+   The argument for going Unix-only is weaker than when this question was written.*
+5. ~~**Surface renderer performance.** If the canvas renderer cannot hold 15 panes at 60fps,
+   take the `TerminalAnsi` + xterm.js fallback.~~
+   **Closed 2026-09-04 per PRD-DELTA #3.** The fallback does not exist — `TerminalAnsi` is
+   negotiated only on herdr's private `TerminalHello` path and endpoint shells are hardcoded
+   to `SemanticFrame`. The question is moot for M0 because §4.4 defers the embedded terminal
+   entirely. It returns at the M1 gate, and the target must then be re-derived in *tabs*, not
+   panes: a connection renders one composited tab, so "15 panes" was never the unit.
 
 ---
 

@@ -251,6 +251,7 @@ osade/
 | [`docs/OSADE.md`](docs/OSADE.md) | Product requirements and build spec. Start here. |
 | [`docs/HERDR-CONTRACT.md`](docs/HERDR-CONTRACT.md) | The verified herdr integration surface — real method names, event names and payloads, with citations. What the daemon codes against. |
 | [`docs/PRD-DELTA.md`](docs/PRD-DELTA.md) | Where the spec was wrong about herdr, and the correction. |
+| [`docs/adr/`](docs/adr) | One record per DECISION taken during the build. |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Architecture notes. |
 
 Sections in `OSADE.md` marked **INVARIANT** are load-bearing. Sections marked **DECISION**
