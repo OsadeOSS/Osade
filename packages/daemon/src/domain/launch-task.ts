@@ -391,6 +391,61 @@ export class LaunchTask {
     }
   }
 
+  /**
+   * Tears a task's herdr workspace down — §9 rule 6.
+   *
+   * Order matters and is not obvious: **every pane must be closed before the worktree is
+   * removed.** A live shell holds its cwd open, and on Windows that makes the directory
+   * undeletable — `worktree.remove` fails with `Permission denied` even with `force: true`.
+   * herdr's own rule ("no live pane in the task's workspace") is therefore a hard prerequisite
+   * rather than a courtesy.
+   *
+   * `force` still means what §9 rule 6 says: it overrides *uncommitted changes*, not live
+   * panes, and belongs behind a typed confirmation in the UI.
+   */
+  async teardown(taskId: string, options: { force?: boolean } = {}): Promise<void> {
+    const task = getTask(this.#db, taskId);
+    if (!task?.herdr_workspace_id) return;
+
+    const paneId = this.#paneFor(taskId);
+    if (paneId) this.#subscriber.unwatchPane(paneId);
+
+    const panes = await this.#herdr
+      .request<'pane.list', { panes: { pane_id: string }[] }>('pane.list', {
+        workspace_id: task.herdr_workspace_id,
+      })
+      .catch(() => ({ panes: [] as { pane_id: string }[] }));
+
+    for (const pane of panes.panes) {
+      await this.#herdr.request('pane.close', { pane_id: pane.pane_id }).catch(() => {});
+    }
+
+    // Give the PTYs a moment to actually exit and release the working directory.
+    await this.#waitForPanesToClose(task.herdr_workspace_id, 10_000);
+
+    await this.#herdr.request('worktree.remove', {
+      workspace_id: task.herdr_workspace_id,
+      force: options.force ?? false,
+    });
+
+    this.#db.prepare('UPDATE task SET herdr_workspace_id = NULL WHERE id = ?').run(taskId);
+    this.#db
+      .prepare('UPDATE agent_fact SET pane_alive = 0, herdr_pane_id = NULL WHERE task_id = ?')
+      .run(taskId);
+  }
+
+  async #waitForPanesToClose(workspaceId: string, timeoutMs: number): Promise<void> {
+    const deadline = this.#now() + timeoutMs;
+    while (this.#now() < deadline) {
+      const result = await this.#herdr
+        .request<'pane.list', { panes: unknown[] }>('pane.list', { workspace_id: workspaceId })
+        .catch(() => null);
+      // A missing workspace means herdr already tore it down with its last pane.
+      if (result == null || result.panes.length === 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
   async prompt(taskId: string, text: string, wait: boolean): Promise<void> {
     const paneId = this.#paneFor(taskId);
     if (!paneId) throw new Error(`task ${taskId} has no live agent pane`);

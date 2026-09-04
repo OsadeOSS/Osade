@@ -92,8 +92,15 @@ afterAll(async () => {
   }
   server?.kill();
   db?.close();
-  rmSync(herdrSessionDir(SESSION), { recursive: true, force: true });
-  rmSync(workdir, { recursive: true, force: true });
+  // Best-effort: on Windows a just-exited PTY can still hold its cwd for a moment, and a
+  // noisy teardown must not fail an otherwise-green run.
+  for (const dir of [herdrSessionDir(SESSION), workdir]) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      // leave it for the OS temp sweeper
+    }
+  }
   delete process.env.OSADE_HOME;
 }, 30_000);
 
@@ -171,12 +178,19 @@ describe.skipIf(!E2E)('M0 acceptance — one task end to end', () => {
     expect(columns.map((c) => c.name)).not.toContain('status');
   }, 180_000);
 
-  it('removes the worktree through herdr, not by hand', async () => {
-    const task = getTaskFacts(db, taskId)!.task;
-    await herdr.request('worktree.remove', {
-      workspace_id: task.herdr_workspace_id!,
-      force: true,
-    });
-    expect(existsSync(task.worktree_path)).toBe(false);
-  }, 60_000);
+  it('tears down through herdr: panes first, then the worktree', async () => {
+    const before = getTaskFacts(db, taskId)!.task;
+    expect(before.herdr_workspace_id).not.toBe(null);
+
+    // §9 rule 6 — panes must go first. A live shell holds its cwd, and on Windows that makes
+    // the directory undeletable even with force.
+    await launcher.teardown(taskId, { force: true });
+
+    expect(existsSync(before.worktree_path)).toBe(false);
+    const after = getTaskFacts(db, taskId)!;
+    expect(after.task.herdr_workspace_id).toBe(null);
+    expect(after.agent?.pane_alive).toBe(false);
+    // §5.2 — tearing a workspace down is not a death certificate.
+    expect(after.agent?.terminated).toBe(false);
+  }, 90_000);
 });
