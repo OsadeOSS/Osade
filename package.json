@@ -1,0 +1,30 @@
+{
+  "name": "osade",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.29.2",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "herdr:codegen": "node scripts/generate-herdr-client.mjs",
+    "herdr:drift": "node scripts/check-herdr-drift.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "json-schema-to-typescript": "^15.0.3",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
+}
