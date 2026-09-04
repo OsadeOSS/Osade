@@ -39,19 +39,19 @@ Three processes. Two of them survive the window closing.
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │  Electron app                                                │
-│    the ledger · task surface · diffs · gates · conventions   │
-└───────┬───────────────────────────────┬──────────────────────┘
-        │ tRPC + WS (loopback only)     │ terminal surfaces
-        ▼                               │ (endpoint protocol)
-┌───────────────────────────────┐       │
-│  Osade daemon                 │       │
-│    tasks · lifecycle · gates  │       │
-│    verification · GitHub      │       │
-│    conventions · memory       │       │
-│    sqlite + change_log + CDC  │       │
-└───────┬───────────────────────┘       │
-        │ JSON API                      │
-        ▼                               ▼
+│    the ledger · task detail · diffs · verification · gates   │
+└───────┬──────────────────────────────────────────────────────┘
+        │ tRPC + WS (loopback only)
+        ▼
+┌───────────────────────────────┐
+│  Osade daemon                 │
+│    tasks · lifecycle · gates  │
+│    verification · GitHub      │
+│    conventions · memory       │
+│    sqlite + change_log + CDC  │
+└───────┬───────────────────────┘
+        │ JSON API
+        ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  herdr (vendored, headless)                                  │
 │    PTYs · panes · tabs · worktrees · agent detection         │
@@ -61,7 +61,11 @@ Three processes. Two of them survive the window closing.
 
 Osade does not reimplement terminals. [**herdr**](https://herdr.dev) is the execution
 substrate: it owns PTYs, VT parsing, git worktrees, agent process detection, and session
-restore. Osade drives it over its JSON API and renders its terminal surfaces directly.
+restore. Osade drives it over its JSON API.
+
+Watching a terminal live is "Open in herdr", which attaches a real herdr client to the same
+session. Embedding the terminal in the Osade window is deliberately deferred —
+see [ADR 0001](docs/adr/0001-no-embedded-terminal-in-m0.md).
 
 **Agents keep running when you close the window.** herdr and the daemon both survive it.
 
@@ -183,7 +187,7 @@ A ledger, not a kanban board. With eight agents running, one vertical list sorte
 │ ▸ solana   │  ⚑ gate   open PR #—   auth-refresh  │  ┌──────────────────────┐  │
 │   ▸ web3js │  ⚑ input  needs you    csv-import    │  │ agent │verify│diff│   │  │
 │ ▸ langchain│  ● live   implementing rate-limit    │  ├──────────────────────┤  │
-│   ▸ deep…  │  ✗ fail   verify       parser-fix    │  │   terminal surface   │  │
+│   ▸ deep…  │  ✗ fail   verify       parser-fix    │  │   diff · verify log  │  │
 │            │  ○ idle   queued       docs-typo     │  └──────────────────────┘  │
 │ + add repo │  ── merged ─────────────────────     │  gates · conventions ·     │
 │            │  ✓ merged pr #4421     null-guard    │  memory · checkpoints      │
@@ -213,10 +217,19 @@ the organization.
 
 ## Status
 
-**Pre-M0.** The specification is complete and the herdr integration surface has been
-verified against a live server. Product code has not started.
+**M0 in progress.** The specification is complete, the herdr integration surface is verified
+against a live server, and the daemon spine is building.
 
-What has been proven end-to-end, headless, with no terminal client attached:
+Working today (`pnpm test` — 55 tests):
+
+- typed herdr client generated from the pinned schema, plus the boot drift check
+  (protocol + method set, never the version string), passing against a real herdr binary
+- sqlite with forward-only migrations, `change_log` CDC triggers, and the broadcaster —
+  a raw SQL write reaches a subscriber, and no table has a `status` column
+- `deriveStatus` and the agent reducer, with the ordering property test
+- the herdr event subscriber as an N+1 connection manager, with the monotonic fact gate
+
+Proven end-to-end against live herdr, headless, with no terminal client attached:
 
 - herdr spawns and keeps agent panes alive with **zero clients** connected
 - a git worktree is created on a pinned base commit and opened as a workspace
@@ -228,7 +241,7 @@ no screen scraping, no polling.
 
 | Milestone | Scope |
 | --- | --- |
-| **M0** | The three-process spine: typed herdr client, sqlite + CDC, Electron surface, one task end-to-end |
+| **M0** | The three-process spine: typed client, sqlite + CDC, Electron surface, one task end-to-end |
 | **M1** | Lifecycle, verification, approval gates |
 | **M2** | GitHub, the contribution loop, triage tasks |
 | **M3** | Repository conventions mining |
@@ -263,5 +276,3 @@ record a choice made deliberately over a plausible alternative.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Osade builds on [herdr](https://herdr.dev) (Apache-2.0) and does not fork it — it extends
-it only through documented extension points.

@@ -14,12 +14,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "herdr:codegen": "node scripts/generate-herdr-client.mjs",
-    "herdr:drift": "node scripts/check-herdr-drift.mjs"
+    "herdr:drift": "vite-node packages/daemon/src/herdr/drift-cli.ts --",
+    "herdr:codegen:check": "node scripts/generate-herdr-client.mjs --check",
+    "check": "pnpm herdr:codegen:check && pnpm -r typecheck && vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "json-schema-to-typescript": "^15.0.3",
     "typescript": "^5.7.2",
+    "vite-node": "^6.0.0",
     "vitest": "^2.1.8"
   },
   "pnpm": {
