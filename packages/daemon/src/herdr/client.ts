@@ -74,11 +74,11 @@ export class HerdrClient {
    * `agent.prompt` with `wait`, `agent.wait` and `pane.wait_for_output`, which block on the
    * server until they settle.
    */
-  async request<M extends HerdrMethod>(
+  async request<M extends HerdrMethod, R = HerdrResult>(
     method: M,
     params: HerdrMethodParams[M],
     timeoutMs?: number,
-  ): Promise<HerdrResult> {
+  ): Promise<R> {
     const id = `osade:${randomUUID()}`;
     const line = JSON.stringify({ id, method, params }) + '\n';
     const budget = timeoutMs ?? this.#timeoutMs;
@@ -94,7 +94,10 @@ export class HerdrClient {
     if (!parsed.result) {
       throw new HerdrTransportError(`${method}: response had neither result nor error`);
     }
-    return parsed.result;
+    // The schema does not correlate a method with its `ResponseResult` variant — that mapping
+    // lives in Rust, not in the bundle — so callers name the shape they expect and narrow on
+    // `result.type` when it matters. Nothing here is hand-written from method names.
+    return parsed.result as R;
   }
 
   /** `ping`, typed, because the boot sequence and health checks both need it (§18.1). */

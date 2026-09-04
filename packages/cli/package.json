@@ -1,0 +1,9 @@
+{
+  "name": "@osade/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "osade": "./src/cli.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@osade/contract": "workspace:*" }
+}
