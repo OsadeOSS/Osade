@@ -27,19 +27,14 @@ Thumbs.db
 .vscode/
 .idea/
 
-/docs/*
-!/docs/next/
-!/docs/next/**
-!/docs/preview/
-!/docs/preview/**
-!/docs/versions/
-!/docs/versions/**
+# docs/ is Osade's spec directory and belongs in the repo.
+# herdr generates its own docs/ and ignores it — that rule lives in
+# backend/.gitignore and applies to backend/docs only.
+
 /.local/
 /backlog
 
 # Local agent state
-/.agents/.pi/
-/.agents/.zed/
 /.pi/todos
 /.pi/issues
 /.pi/cache

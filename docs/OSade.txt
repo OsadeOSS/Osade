@@ -1,0 +1,26 @@
+### Osade Features
+
+* **Multi-Agent Development** — Run Claude, Codex, Gemini, and other coding agents side-by-side.
+* **Concurrent Same-Repository Agents** — Run multiple agents simultaneously on the same repository, each working in its own isolated Git worktree.
+* **Git Worktrees** — Give every task and agent its own isolated worktree.
+* **Multi-Repository Workspace** — Work across multiple repositories and projects from one IDE.
+* **Organization Workspaces** — Manage repositories belonging to the same open-source organization as one workspace.
+* **Agent Orchestration** — Start, stop, pause, resume, delegate, and coordinate agents.
+* **Persistent Agent Sessions** — Resume agents, terminals, and tasks exactly where you left them.
+* **Shared Agent Memory** — Automatically share useful discoveries and knowledge between agents.
+* **Layered Memory** — Personal, organization, repository, task, and agent-level knowledge.
+* **Automatic Repository Skills** — Learn a repository's contribution practices, conventions, and workflows automatically.
+* **Repository Intelligence** — Understand issues, discussions, PRs, documentation, CI, and project structure.
+* **Personal Coding Habits** — Learn and apply your preferred development workflow across projects.
+* **Cross-Repository Context** — Connect related repositories so agents understand dependencies and relationships.
+* **Agent Activity Monitoring** — See what every agent is doing, changing, running, and learning.
+* **Permission & Approval Gates** — Control sensitive actions such as commits, pushes, PRs, and merges.
+* **Automated Verification** — Validate agent work through tests, linting, type checks, CI, and repository-specific checks.
+* **Human-in-the-Loop Review** — Take over any agent workspace and review or modify its work at any time.
+* **GitHub Integration** — Manage issues, discussions, branches, pull requests, reviews, and CI from the IDE.
+* **Persistent Workspaces** — Preserve worktrees, terminals, layouts, agents, and task state between sessions.
+* **Terminal Multiplexing** — tmux/wmux-style persistent terminal and agent sessions.
+* **Task-to-Workspace Mapping** — Connect every issue directly to its worktree, agent, terminal, and verification state.
+* **Agent-Agnostic Runtime** — Use different coding agents without locking Osade to a single model or provider.
+* **Open-Source Workflow Intelligence** — Adapt agent behavior to the unique contribution culture of each project.
+* **Safe Autonomous Contribution** — Let agents work independently while keeping critical shipping decisions under human control.

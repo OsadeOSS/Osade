@@ -1,0 +1,607 @@
+# Kanban — Architecture & Agent Handling
+
+> Scope: the whole system (CLI → runtime server → browser UI → desktop shell), with a deep pass on
+> **how coding agents are launched, tracked, and driven**.
+>
+> A shorter narrative version lives at [`docs/architecture.md`](docs/architecture.md). This document is the
+> mechanical one: exact modules, exact state transitions, exact files on disk.
+
+---
+
+## 1. What Kanban is
+
+Kanban is a **local-first orchestration board for coding agents**. It is not a web service. It is a
+long-lived Node process started from your shell (`kanban`), which:
+
+1. indexes git repositories ("workspaces"),
+2. keeps a kanban board of tasks per workspace,
+3. creates a **git worktree per task**,
+4. launches a coding agent inside that worktree,
+5. tracks whether that agent is *running*, *needs your attention*, or *done*,
+6. streams all of it to a React app in the browser.
+
+The unit of value is: **a card on a board is a live agent session in an isolated checkout.**
+
+---
+
+## 2. Process & deployment topology
+
+```text
+     ┌───────────────────────────────────────────────────────────────────┐
+     │  User's shell            $ kanban                                 │
+     └───────────────────────────┬───────────────────────────────────────┘
+                                 │ inherits PATH / env  (important — see §6.1)
+                                 v
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Kanban runtime process (src/, Node >= 22, single long-lived process)         │
+│                                                                              │
+│   HTTP + WS server        src/server/runtime-server.ts                       │
+│     /                     static web-ui bundle (dist/web-ui)                 │
+│     /api/trpc/*           typed RPC          src/trpc/app-router.ts          │
+│     /api/runtime/ws       state stream       src/server/runtime-state-hub.ts │
+│     /api/terminal/io      PTY bytes          src/terminal/ws-server.ts       │
+│     /api/terminal/control PTY control        src/terminal/ws-server.ts       │
+│     /api/passcode/*       remote-mode auth   src/security/passcode-manager.ts│
+│                                                                              │
+│   Per-workspace state     src/server/workspace-registry.ts                   │
+│     └─ TerminalSessionManager   (PTY agents)                                 │
+│     └─ ClineTaskSessionService  (native SDK agent)                           │
+└───────────┬────────────────────────────────────────┬─────────────────────────┘
+            │ node-pty                               │ in-process SDK
+            v                                        v
+   ┌────────────────────────┐              ┌──────────────────────────────┐
+   │ CLI agent processes    │              │ @clinebot/core session host  │
+   │ claude / codex /       │              │ providers, OAuth, MCP,       │
+   │ droid / kiro / gemini  │              │ persisted session artifacts  │
+   │ + workspace shell      │              └──────────────────────────────┘
+   │ each cwd = a worktree  │
+   └────────────────────────┘
+
+  Consumers of the HTTP server:
+    • Browser tab (auto-opened)            — the normal path
+    • packages/desktop (Electron shell)    — spawns the CLI as a child, wraps it in a window
+    • `kanban hooks ingest` subprocesses   — agents calling *back* into the runtime (§6.4)
+```
+
+Three client shapes, one server:
+
+| Client | Path | Notes |
+| --- | --- | --- |
+| Browser | `open()` on startup | default |
+| Electron desktop | `packages/desktop` (`runtime-orchestrator.ts` spawns `runtime-child.ts`) | adds OAuth relay, protocol handler, native menus |
+| Remote (SSH/tunnel) | same server + passcode gate | `src/security/passcode-manager.ts`, cookie session + rate limit; native folder pickers degrade to manual path entry |
+
+---
+
+## 3. Layering
+
+| Layer | Directory | Responsibility | Must NOT do |
+| --- | --- | --- | --- |
+| CLI / bootstrap | `src/cli.ts` | arg parsing, port selection, TLS, browser open, graceful shutdown | own session logic |
+| Transport | `src/trpc/`, `src/server/` | typed contract, auth, static assets, websocket fanout | deep agent logic |
+| Coordination | `src/trpc/runtime-api.ts` | route a request to the right execution path | become a god file |
+| Execution — PTY | `src/terminal/` | spawn/stream/kill CLI agents | know about the Cline SDK |
+| Execution — native | `src/cline-sdk/` | adapt `@clinebot/*` into Kanban semantics | leak SDK types outward |
+| Domain | `src/workspace/`, `src/state/`, `src/config/` | worktrees, git, board persistence, prefs | render anything |
+| Presentation | `web-ui/src/` | board, detail view, terminals, chat | be the source of truth for sessions |
+
+`src/cli.ts` **lazily imports** the server stack (`await Promise.all([import(...)])` inside `startServer`).
+This is deliberate: `kanban task create` and `kanban hooks ingest` are short-lived subcommands, and eagerly
+loading the runtime graph (specifically the Cline SDK host) left those processes alive after they printed
+their result. Keep subcommands off the server import graph.
+
+---
+
+## 4. Data model & persistence
+
+### 4.1 On disk
+
+```text
+~/.cline/kanban/
+  config.json                       global prefs (selected agent, shortcuts, prompt templates)
+  workspaces/
+    index.json                      workspaceId -> repoPath
+    <workspaceId>/
+      board.json                    columns + cards
+      sessions.json                 last known RuntimeTaskSessionSummary per task
+      meta.json                     revision / metadata
+    <workspaceId>.lock              proper-lockfile guard
+
+~/.cline/worktrees/<taskId>/<repoFolderName>/    per-task git worktree
+
+<repo>/.cline/kanban/config.json    per-project prefs overlay
+```
+
+Writes go through `src/fs/locked-file-system.ts` (`proper-lockfile`), because several processes
+(runtime + `kanban hooks ingest` + `kanban task ...`) can touch the same board.
+
+Workspace state saves are **revision-checked** — `runtimeWorkspaceStateSaveRequestSchema.expectedRevision`
+produces a conflict response rather than a lost update.
+
+### 4.2 The contract
+
+`src/core/api-contract.ts` (~1.3k lines) is the single Zod schema file for everything crossing a boundary.
+`src/core/api-validation.ts` holds the parse helpers. tRPC procedures declare `.output(<schema>)`, so the
+browser's types are derived, never hand-written.
+
+Key enums:
+
+```ts
+RuntimeAgentId          = "claude" | "codex" | "gemini" | "opencode" | "droid" | "kiro" | "cline"
+RuntimeBoardColumnId    = "backlog" | "in_progress" | "review" | "trash"   // legacy "done" -> "trash"
+RuntimeTaskSessionState = "idle" | "running" | "awaiting_review" | "failed" | "interrupted"
+RuntimeTaskSessionMode  = "act" | "plan"
+ReviewReason            = "attention" | "exit" | "error" | "interrupted" | "hook" | null
+RuntimeHookEvent        = "to_review" | "to_in_progress" | "activity"
+```
+
+### 4.3 `RuntimeTaskSessionSummary` — the spine of the system
+
+Every surface (board card badge, detail header, sidebar, notifications, auto-review) reads this one object:
+
+```ts
+{ taskId, state, mode, agentId, workspacePath, pid, startedAt, updatedAt, lastOutputAt,
+  reviewReason, exitCode, lastHookAt, latestHookActivity, warningMessage,
+  latestTurnCheckpoint, previousTurnCheckpoint }
+```
+
+Both execution paths — PTY and Cline — produce **the same summary shape**. That is what lets the UI treat
+a Codex process and a native Cline session as the same kind of thing.
+
+---
+
+## 5. Runtime server internals
+
+### 5.1 Workspace registry (`src/server/workspace-registry.ts`)
+
+A workspace = an indexed git repo. The registry owns, per workspace id:
+
+- the resolved `repoPath`
+- the merged runtime config (global overlaid by `<repo>/.cline/kanban/config.json`)
+- a lazily created **`TerminalSessionManager`**
+- a lazily created **`ClineTaskSessionService`**
+
+`ensureTerminalManagerForWorkspace(workspaceId, repoPath)` is the creation point; `onTerminalManagerReady`
+notifies the state hub so it can subscribe to summaries. `disposeWorkspace` tears both down.
+
+Multi-workspace is real: several boards can be live in one runtime process, each with its own managers.
+
+### 5.2 State hub (`src/server/runtime-state-hub.ts`)
+
+One websocket (`/api/runtime/ws`) per browser tab. On connect the client gets a `snapshot`; after that it
+receives a discriminated union of pushes:
+
+| Message | Trigger |
+| --- | --- |
+| `snapshot` | connect / workspace switch |
+| `workspace_state_updated` | board or sessions.json changed |
+| `task_sessions_updated` | any summary changed (both execution paths) |
+| `projects_updated` | project list/counts changed |
+| `workspace_metadata_updated` | `workspace-metadata-monitor.ts` saw git change on disk |
+| `task_ready_for_review` | a task crossed into review (drives notifications) |
+| `task_chat_message` / `task_chat_cleared` | native Cline chat |
+| `mcp_auth_updated`, `cline_session_context_updated` | Cline auxiliary state |
+| `error` | per-connection failure |
+
+The browser **does not poll**. It subscribes.
+
+### 5.3 Terminal websockets (`src/terminal/ws-server.ts`)
+
+PTY bytes deliberately do **not** ride the state stream — they get two dedicated sockets:
+
+- `/api/terminal/io?taskId=&workspaceId=&clientId=` — raw output + input
+- `/api/terminal/control?...` — resize, stop, `output_ack`, `restore_complete`
+
+**Multi-viewer backpressure.** One PTY, many tabs. Each viewer is tracked by `clientId` with its own
+restore state and pending buffer. Output is batched (`OUTPUT_BATCH_INTERVAL_MS = 4`, with a low-latency
+fast path for chunks under 256 B). When a viewer's unacknowledged bytes cross the high-water mark (16 KiB)
+it joins `backpressuredViewerIds` and the **shared PTY is paused**; it resumes only when the *last* slow
+viewer drains below the low-water mark (4 KiB) or disconnects. This is the VS Code model, extended to N
+viewers.
+
+---
+
+## 6. Agent handling — the core of the system
+
+This is the part worth understanding in detail. There are **two execution paths** and they are not
+symmetric by accident.
+
+```text
+                    runtime-api.startTaskSession()
+                                │
+              effectiveAgentId = previousTerminalAgentId
+                                 ?? card.agentId
+                                 ?? workspaceConfig.selectedAgentId
+                                │
+                  ┌─────────────┴──────────────┐
+        agentId === "cline"              everything else
+                  │                             │
+                  v                             v
+   ClineTaskSessionService            TerminalSessionManager
+   (in-process SDK session)           (node-pty child process)
+                  │                             │
+                  └────────► same RuntimeTaskSessionSummary ◄────┘
+                                    │
+                            runtime-state-hub -> browser
+```
+
+### 6.0 Agent selection precedence
+
+Written out explicitly in `runtime-api.ts` because it is easy to get wrong:
+
+1. **`previousTerminalAgentId`** — the `agentId` persisted in the last session summary. Only consulted on
+   `resumeFromTrash`, so restoring a trashed card resumes on the *same* agent runtime.
+2. **`body.agentId`** — the card's per-task override.
+3. **`scopedRuntimeConfig.selectedAgentId`** — the workspace default.
+
+Cline model/reasoning settings (`clineSettings`) are the exception: they are always read fresh from the
+card, never from the session, so changing the model on the card takes effect on the next launch.
+
+There is a targeted optimization here: on `resumeFromTrash` with no known previous agent, Kanban probes
+`rebindPersistedTaskSession` to see whether a persisted *Cline* session exists. If the summary already names
+a concrete non-Cline agent that probe is skipped — cold-starting the Cline SDK host costs seconds and would
+otherwise tax every Codex restore.
+
+### 6.1 The catalog (`src/core/agent-catalog.ts`)
+
+Declarative table of every supported CLI:
+
+| id | binary | base args | autonomous args |
+| --- | --- | --- | --- |
+| `claude` | `claude` | — | `--permission-mode auto` |
+| `codex` | `codex` | — | `--dangerously-bypass-approvals-and-sandbox` |
+| `cline` | `cline` | — | `--auto-approve-all` |
+| `opencode` | `opencode` | — | — |
+| `droid` | `droid` | — | `--auto high` |
+| `kiro` | `kiro-cli` | `chat` | `--trust-all-tools` |
+| `gemini` | `gemini` | — | `--yolo` |
+
+`RUNTIME_LAUNCH_SUPPORTED_AGENT_IDS` gates which entries are actually offered — currently
+`cline, claude, codex, droid, kiro` (opencode/gemini are commented out but their adapters still exist).
+
+`src/terminal/agent-registry.ts` turns that catalog into a `RuntimeConfigResponse`: it probes PATH via
+`isBinaryAvailableOnPath` (`command-discovery.ts`) to mark `installed`, marks the configured one, and
+resolves the effective command. **Cline reports `installed: true` unconditionally** — it is in-process, not
+a binary.
+
+> **PATH matters.** Kanban inherits the shell it was launched from and uses *direct* PATH checks and direct
+> spawns. Do not shell out to `zsh -i` to find a binary; with heavy `conda`/`nvm` init that freezes the
+> runtime when several tasks start at once. (See `AGENTS.md`.)
+
+### 6.2 Adapters (`src/terminal/agent-session-adapters.ts`) — the interesting file
+
+Every PTY agent has one adapter behind a deliberately tiny interface:
+
+```ts
+interface AgentSessionAdapter { prepare(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch>; }
+
+interface PreparedAgentLaunch {
+  binary?: string;                            // adapters may WRAP the binary
+  args: string[];
+  env: Record<string, string | undefined>;
+  cleanup?: () => Promise<void>;              // torn down with the session
+  deferredStartupInput?: string;              // typed in only once the TUI is ready
+  detectOutputTransition?: (data, summary) => SessionTransitionEvent | null;
+  shouldInspectOutputForTransition?: (summary) => boolean;   // cheap gate; avoids decoding every chunk
+}
+```
+
+`prepareAgentLaunch()` first runs the prompt through `task-image-prompt.ts` (pasted images are written out
+and referenced from the prompt), then dispatches on `ADAPTERS[agentId]`.
+
+Each adapter answers the same five questions in agent-specific dialect:
+
+| Concern | claude | codex | droid | kiro | cline (CLI) | gemini / opencode |
+| --- | --- | --- | --- | --- | --- | --- |
+| autonomous | `CLAUDE_CODE_ENABLE_AUTO_MODE=1` + `--permission-mode auto` | `--dangerously-bypass-approvals-and-sandbox` | `autonomyMode: auto-high` in settings | `--trust-all-tools` | `--auto-approve-all` | `--yolo` / — |
+| plan mode | `--permission-mode plan` | deferred `/plan <prompt>` input | `autonomyMode: spec` | — | `--plan` | — |
+| resume | `--continue` | `resume --last` | `--resume` | `--resume` | `--continue` | — |
+| system prompt | `--append-system-prompt` | `-c developer_instructions=...` | `--append-system-prompt` | agent config file | append | varies |
+| hooks | generated `settings.json` + `--settings` | `-c` hook config + trust hashes | generated `settings.json` | generated agent config | generated shell scripts + `--hooks-dir` | OpenCode plugin file |
+
+Notable per-adapter mechanics:
+
+- **Claude** writes a full `settings.json` mapping `Stop`, `SubagentStop`, `PreToolUse`, `PostToolUse`,
+  `PostToolUseFailure`, `PermissionRequest`, `Notification`, `UserPromptSubmit` to `kanban hooks ingest`
+  invocations, then passes `--settings <path>`.
+- **Codex** cannot take a settings file, so `codex-hook-config.ts` injects `-c` overrides *before* any
+  `resume`/`fork` subcommand and registers **trusted command hashes** (Codex refuses unknown hook commands).
+  Codex also gets a wrapper binary (`kanban hooks codex-wrapper`) that tails the rollout log —
+  `hook-events/codex-hook-events.ts` — to recover the final assistant message.
+- **Cline (CLI mode)** gets *generated shell scripts* per event in a hooks dir (chmod +x on non-Windows),
+  because its hook contract is script-based rather than declarative.
+- **OpenCode** gets a generated plugin file, plus config sniffing to reuse the user's preferred model
+  (`tryExtractOpenCodeModelFromConfig` even strips JSONC comments).
+- **Kiro** gets a named agent definition (`kanban`) with `agentSpawn` / `userPromptSubmit` hooks.
+
+Hook commands are built with `buildKanbanCommandParts` (`src/core/kanban-command.ts`), which reconstructs
+how *this* runtime was invoked — `node dist/cli.js`, `tsx src/cli.ts`, or a global `kanban` shim — so a hook
+fired inside an agent reaches the same binary that launched it.
+
+### 6.3 Launching a PTY session (`src/terminal/session-manager.ts`)
+
+`TerminalSessionManager` is per-workspace and holds a `SessionEntry` per task:
+
+```ts
+interface SessionEntry {
+  summary; active: ActiveProcessState | null; terminalStateMirror;
+  listeners; restartRequest; suppressAutoRestartOnExit;
+  autoRestartTimestamps; pendingAutoRestart;
+}
+```
+
+`startTaskSession()` in order:
+
+1. Record a `restartRequest` (so a crash can be replayed).
+2. If already active in a live state, return the current summary (idempotent).
+3. Create a `TerminalStateMirror` — a headless `@xterm/headless` terminal with 10k scrollback and the
+   serialize addon. **This is what makes terminals survive page reloads:** the server holds authoritative
+   screen state and replays a serialized snapshot to a reconnecting tab.
+4. `prepareAgentLaunch(...)` -> binary/args/env/hooks.
+5. Build env: `process.env` + adapter env + `COLORTERM=truecolor`, `TERM=xterm-256color`,
+   `TERM_PROGRAM=kanban`.
+6. `PtySession.spawn()` (`node-pty`; Windows goes through `windows-cmd-launch.ts` / ComSpec).
+7. Wire the output pipeline (below).
+
+**Output pipeline per chunk:**
+
+```text
+PTY chunk
+  -> filterTerminalProtocolOutput()   intercept OSC 10/11 color queries and answer them
+  -> terminalStateMirror.applyOutput() always
+  -> decode to utf8 ONLY IF a consumer needs it:
+        • workspace-trust buffer is open, or
+        • detectOutputTransition exists AND shouldInspectOutputForTransition(summary)
+  -> workspace-trust auto-confirm
+  -> summary.lastOutputAt = now
+  -> deferred Codex startup input, if the TUI has rendered
+  -> fan out to listeners (ws-server viewers)
+```
+
+Two subtleties worth naming:
+
+- **OSC startup probes.** Codex/OpenCode query foreground/background color before a browser terminal has
+  attached. The server synthesizes replies (`ESC ]10;rgb:...`) and disables the filter once a live listener
+  exists — otherwise the TUI stalls on startup.
+- **Workspace trust.** Claude and Codex show a "do you trust this folder?" prompt. Since the cwd is a
+  Kanban-created worktree, the manager watches a rolling 16 KiB buffer for those prompts and auto-presses
+  Enter after a delay, then clears the buffer so stale trust text does not re-match later heuristics.
+
+**Auto-restart** is bounded: at most `MAX_AUTO_RESTARTS_PER_WINDOW = 3` inside `AUTO_RESTART_WINDOW_MS = 5000`.
+
+### 6.4 The hook loop — how Kanban knows what an agent is doing
+
+This is the mechanism that turns "a process is running" into "this card needs you".
+
+```text
+  agent process (in worktree)
+        │  fires its own hook (Stop / PreToolUse / Notification / ...)
+        v
+  $ kanban hooks ingest --event to_review --source claude ...
+        │  reads KANBAN_HOOK_TASK_ID + KANBAN_HOOK_WORKSPACE_ID from env
+        │  (injected at launch by createHookRuntimeEnv)
+        v
+  tRPC  hooks.ingest  ->  src/trpc/hooks-api.ts
+        │
+        ├─ resolve workspace -> TerminalSessionManager -> summary
+        ├─ canTransitionTaskForHookEvent(summary, event)?
+        │     no  -> applyHookActivity(metadata) only  (activity is never a transition)
+        │     yes -> transitionToReview("hook") | transitionToRunning()
+        ├─ capture / delete a turn checkpoint (git ref)
+        └─ broadcast workspace_state_updated + task_ready_for_review
+                                    │
+                                    v
+                          browser board updates
+```
+
+Three events only — `to_review`, `to_in_progress`, `activity` — deliberately narrow, so every agent's
+richer event vocabulary is mapped down by its adapter. Metadata (`toolName`, `activityText`, `finalMessage`,
+`hookEventName`, `notificationType`, `source`) rides along and becomes `latestHookActivity`, which the card
+renders as "Editing src/foo.ts...".
+
+The `kanban hooks ingest` child talks back over tRPC (`runtime-endpoint.ts` resolves the URL), with a
+timeout wrapper so a hung runtime never blocks the agent.
+
+### 6.5 The state machine (`src/terminal/session-state-machine.ts`)
+
+A pure reducer — no I/O, fully unit-testable:
+
+```text
+                 hook.to_review (only from running)
+      running ─────────────────────────────────────► awaiting_review(reason="hook")
+         ▲                                                   │
+         │  hook.to_in_progress  /  agent.prompt-ready        │
+         └───────────────────────────────────────────────────┘
+              (only if reason in {attention, hook, error})
+
+      any ── process.exit ──►  exitCode === 0 -> awaiting_review(reason="exit")
+                               exitCode !== 0 -> awaiting_review(reason="error")
+                               interrupted    -> interrupted(reason="interrupted")
+```
+
+`agent.prompt-ready` is the **output-derived** transition: Codex has no "I'm working again" hook, so
+`codexPromptDetector` strips ANSI and watches for the prompt marker, but *only* while the session sits in
+`awaiting_review` with a recoverable reason (`shouldInspectCodexOutputForTransition`). That gate is why the
+manager can skip utf8-decoding most chunks.
+
+### 6.6 Native Cline path (`src/cline-sdk/`)
+
+Cline is not a subprocess — it runs in-process against `@clinebot/core` / `@clinebot/llms`, which already
+own provider settings, OAuth, MCP, session hosting, and history persistence. Reimplementing those on top of
+a PTY would lose all of it.
+
+```text
+runtime-api.ts
+   ├─► cline-provider-service.ts ──► sdk-provider-boundary.ts ──► @clinebot providers / OAuth / catalog
+   └─► cline-task-session-service.ts
+           ├─► cline-session-runtime.ts ─► sdk-runtime-boundary.ts ─► SDK session host + persisted records
+           ├─► cline-message-repository.ts   live messages + hydrated history
+           ├─► cline-event-adapter.ts        SDK events -> Kanban mutations
+           └─► cline-session-state.ts        pure summary/message helpers
+```
+
+| Module | Job |
+| --- | --- |
+| `sdk-provider-boundary.ts` | the **only** file allowed to import SDK provider/OAuth APIs |
+| `sdk-runtime-boundary.ts` | the **only** file allowed to import SDK session-host/persistence APIs |
+| `cline-provider-service.ts` | provider settings, model catalog, OAuth/device auth, `resolveLaunchConfig` |
+| `cline-session-runtime.ts` | live session host; taskId <-> sessionId binding |
+| `cline-message-repository.ts` | Kanban-side chat state + history hydration |
+| `cline-event-adapter.ts` | protocol-specific event translation |
+| `cline-mcp-runtime-service.ts` / `cline-mcp-settings-service.ts` | MCP servers + their OAuth |
+| `cline-context-overflow-compaction.ts` | context-window compaction |
+| `cline-tool-call-display.ts`, `cline-slash-commands.ts` | presentation-shaped adaptation |
+
+Service surface mirrors the PTY manager where it can (`startTaskSession`, `stopTaskSession`,
+`sendTaskSessionInput`, `applyTurnCheckpoint`, `getSummary`, `listSummaries`) and adds chat-native
+operations (`cancelTaskTurn`, `listMessages`, `loadTaskSessionMessages`, `clearTaskSession`,
+`rebindPersistedTaskSession`).
+
+**Never** put Cline API keys or OAuth tokens into `src/config/runtime-config.ts`. The SDK provider store
+owns them.
+
+### 6.7 The home sidebar agent (`src/core/home-agent-session.ts`)
+
+The sidebar agent panel looks like a task but has no card and no worktree. It uses a synthetic id:
+
+```
+__home_agent__:<workspaceId>:<agentId>
+```
+
+`isHomeAgentSessionId()` short-circuits worktree creation (cwd = the repo root) and turn checkpointing.
+The rest of the runtime treats it as an ordinary task id, which is exactly the point — it reuses the whole
+session stack for free. Cline renders chat there; other agents render a terminal. Switching Projects <-> Agent
+must not restart it; switching project or agent config rotates it.
+
+A grit lint plugin (`grit/no-home-agent-prefix-literal.grit`) blocks re-typing the raw prefix anywhere else.
+
+### 6.8 Worktrees (`src/workspace/task-worktree.ts`)
+
+`ensureTaskWorktreeIfDoesntExist({ cwd, taskId, baseRef })` -> `~/.cline/worktrees/<taskId>/<repoFolder>`.
+
+Rules learned the hard way, encoded in comments:
+
+- **An existing worktree is authoritative.** An earlier version compared worktree HEAD against the latest
+  `baseRef` commit and recreated it when the base branch advanced — destroying task progress. It now only
+  creates *missing* worktrees.
+- Creation is serialized by a repo-level setup lock, with a double-check inside the lock.
+- `git worktree prune` runs before `worktree add`, because an interrupted removal leaves a registration
+  behind and `add` fails with "missing but already registered".
+- Worktrees are created `--detach` at the resolved base commit; a stored patch can be replayed.
+- Gitignored-but-needed paths (`.env`, local tooling) are mirrored/symlinked in via `mirrorIgnoredPath` /
+  `syncIgnoredPathsIntoWorktree`; `task-worktree-turbopack.ts` handles a Next/Turbopack-specific case.
+
+**Turn checkpoints** (`src/workspace/turn-checkpoints.ts`): each launch and each hook transition captures a
+git ref snapshot, stored as `latestTurnCheckpoint` / `previousTurnCheckpoint` on the summary. That is what
+powers "undo this agent turn". All checkpoint capture is best-effort — it never fails a launch.
+
+---
+
+## 7. Frontend architecture (`web-ui/`)
+
+Tailwind v4 + Radix primitives + Lucide + sonner. Always dark; tokens live in `globals.css @theme`.
+
+```text
+App.tsx                       composition root only
+├── runtime/                   client seam
+│     trpc-client.ts           getRuntimeTrpcClient  (createWorkspaceTrpcClient is lint-restricted
+│                              to runtime-config-query.ts / workspace-state-query.ts)
+│     use-runtime-state-stream.ts   the /api/runtime/ws subscription
+│     use-workspace-persistence.ts  revision-checked board saves
+├── hooks/                     where the behavior actually lives
+│     use-task-sessions, use-task-start-actions, use-cline-chat-session,
+│     use-cline-chat-runtime-actions, use-home-agent-session, use-review-auto-actions,
+│     use-terminal-panels, use-git-actions, use-board-interactions, ...
+├── terminal/                  persistent-terminal-manager.ts (xterm + webgl/fit/clipboard/unicode11)
+│                              terminals are parked in a hidden DOM root, not unmounted,
+│                              so switching cards never drops a session
+├── state/ stores/ storage/    board reducers, drag rules, metadata store, localStorage
+└── components/                mostly presentational
+```
+
+If you are asking "how does X work?", the answer is almost always a hook, not a component.
+
+**Auto-review** (`use-review-auto-actions.ts`) is the closing half of the loop: when a card with
+`autoReviewEnabled` lands in review, it waits for a clean working tree, runs the configured git action
+(commit or open PR, prompt templates from runtime config), then moves the card to trash — the board advances
+without a human touching it.
+
+---
+
+## 8. Enforced boundaries
+
+Not conventions — lint failures (`biome.json` + `grit/`):
+
+| Rule | Where | Why |
+| --- | --- | --- |
+| no `@clinebot/core` imports outside `src/cline-sdk/**` | `noRestrictedImports` | keeps the SDK behind two boundary files |
+| `createWorkspaceTrpcClient` only in `runtime-config-query.ts` / `workspace-state-query.ts` | `noRestrictedImports` | one place creates workspace clients |
+| no raw `__home_agent__` literal | `grit/no-home-agent-prefix-literal.grit` | one definition of the synthetic id |
+| no `console.*`, no `process.exit` in `src/**` except `cli.ts` | grit plugins | the runtime is a library, not a script |
+| no `process.env` destructuring | grit plugin | env is read at use sites, not snapshotted |
+
+Plus the standing rules from `AGENTS.md`: no `any`, no inline/dynamic imports, never downgrade code to
+satisfy a stale dependency — upgrade the dependency.
+
+---
+
+## 9. Testing & build
+
+```
+test/runtime/      unit-ish, must not boot real hosts
+test/utilities/    pure helpers
+test/integration/  slower, real subsystems
+web-ui/tests/      vitest + playwright
+```
+
+`npm run test:fast` = `runtime` + `utilities`, and it is the pre-commit gate.
+
+> **If CI hangs on Node 22 after tests appear to finish**, suspect a live subprocess or an SDK host that a
+> unit-style suite booted — not a slow test body. `test/runtime/cline-sdk/cline-task-session-service.test.ts`
+> was the original offender. Read `.plan/docs/node22-ci-hanging-tests-investigation.md` before re-deriving
+> this.
+
+Build: `web-ui` (vite) -> `scripts/build.mjs` (esbuild bundles `src/` to `dist/cli.js`) -> web assets copied
+to `dist/web-ui` -> Sentry sourcemaps -> chmod. The desktop app stages that CLI into `packages/desktop/cli`
+and wraps it with electron-builder.
+
+---
+
+## 10. Adding a new CLI agent — the checklist
+
+1. Add the id to `runtimeAgentIdSchema` (`src/core/api-contract.ts`).
+2. Add a catalog entry (`src/core/agent-catalog.ts`) and list it in `RUNTIME_LAUNCH_SUPPORTED_AGENT_IDS`.
+3. Write an adapter in `agent-session-adapters.ts` and register it in `ADAPTERS`. Decide, explicitly:
+   - autonomous flag, plan-mode flag, resume flag, system-prompt flag;
+   - how the agent reports progress — real hooks (preferred), or an output detector
+     (`detectOutputTransition` + a tight `shouldInspectOutputForTransition` gate);
+   - whether it needs a wrapper binary or a generated config/plugin/script, and a `cleanup`.
+4. Map its events onto exactly `to_review` / `to_in_progress` / `activity` via `buildHookCommand`, and
+   inject `createHookRuntimeEnv({ taskId, workspaceId })`.
+5. Handle any first-run trust/consent prompt (see §6.3) — the cwd is a fresh worktree every time.
+6. Tests: an adapter test for arg/config construction, and a state-machine test if you added a detector.
+
+**Do not** route a new agent through the Cline path. That path exists because the Cline SDK owns providers,
+auth, and persistence — not because it is the nicer abstraction.
+
+---
+
+## 11. Design rules to preserve
+
+- One concern, one owner. Ambiguity here is the source of most awkward diffs.
+- `runtime-api.ts` routes and validates; it does not accumulate session logic.
+- The SDK stays behind the two boundary modules.
+- Cline provider secrets never enter Kanban runtime config.
+- The browser is a client of streamed state, never the source of truth for a long-running session.
+- Detail view and sidebar share hooks; they must not fork behavior.
+- Prefer capability-oriented branching over spreading `agentId === "cline"` checks.
+- Direct PATH checks and direct spawns on hot paths — never an interactive shell.
+
+## 12. Known, deliberate tradeoffs
+
+- The home sidebar uses a synthetic session id instead of a first-class workspace-native session type.
+- Some selection code still branches on `"cline"` literally; capability-based routing is the direction.
+- Cline is chat-native while the rest of the catalog is command-driven, so a few abstractions are parallel
+  but not identical.
+- `agent-session-adapters.ts` is large (~1.5k lines) because it concentrates per-agent weirdness in one
+  place on purpose. That is preferable to scattering it.

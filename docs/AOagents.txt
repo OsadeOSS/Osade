@@ -1,0 +1,72 @@
+Architecture
+
+AO is a local-first Go daemon + Electron supervisor, not a web app. Roughly 393k lines of Go across 1,219 files, plus ~900 TS/TSX files in the renderer.
+
+The layer stack (backend/internal/)
+
+Electron/React  ·  Expo/RN mobile  ·  `ao` CLI      ← thin renderers
+        │ REST + SSE + WebSocket
+┌───────┴──────────────────────────────────────────┐
+│ httpd/         chi router, controllers, DTOs,    │
+│                terminal mux, SSE                 │
+├──────────────────────────────────────────────────┤
+│ service/       read-model assembly, derives      │
+│                display status at read time       │
+│  session · chat · pr · review · project · agent  │
+├──────────────────────────────────────────────────┤
+│ session_manager/   command engine (spawn, kill,  │
+│                    handoff, agent switch)        │
+│ lifecycle/         THE canonical write path for  │
+│                    durable session facts         │
+├──────────────────────────────────────────────────┤
+│ observe/  scm (GitHub, 30s) · reaper (PTY, 5s)   │
+├──────────────────────────────────────────────────┤
+│ storage/sqlite  109 goose migrations, sqlc gen,  │
+│                 DB triggers → change_log         │
+│ cdc/            poller + broadcaster → SSE       │
+├──────────────────────────────────────────────────┤
+│ ports/          ~24 interface files              │
+│ adapters/       agent(38) · chatdriver(15) ·     │
+│                 runtime(tmux/conpty/ptyexec) ·   │
+│                 workspace(git worktree) · scm    │
+└──────────────────────────────────────────────────┘
+
+The core pipeline
+
+OBSERVE → UPDATE → DERIVE. External facts (GitHub PRs/CI/reviews, PTY liveness) get reduced by lifecycle.Manager into a tiny durable set: activity_state, is_terminated, session_mode + controller generation, and PR/check/comment rows. Everything the user sees — working, needs_input, ci_failed, mergeable — is computed at read time in service/session. Nothing display-shaped is ever stored.
+
+Event propagation
+
+SQLite triggers write every mutation into a change_log table. A CDC poller tails it with a watermark, decodes events, and fans them out to a broadcaster → SSE (GET /api/v1/events with Last-Event-ID replay), terminal fanout, and cache invalidation. There is no second event path — that's rule #7 in the load-bearing list.
+
+Isolation unit
+
+One session = one task = one git worktree = exactly one live controller. Either a TUI controller (agent running inside tmux/conpty/detached PTY host, attached over WebSocket) or a Chat controller (native protocol driver, no terminal runtime at all). Never both.
+
+Network posture
+
+Loopback 127.0.0.1:3001, unauthenticated, no exceptions. An opt-in second listener on 0.0.0.0:3011 for mobile, bearer-auth'd, with exactly one unauthenticated route (GET /api/v1/identity) documented in its own ADR. Browser automation goes over a dedicated unix socket / named pipe, never a remote-debugging port.
+
+---
+
+What's actually novel
+
+1. Durable facts / derived status as an enforced invariant. Most orchestrators store a status column and fight drift forever. AO makes it structurally impossible: status is a pure function over facts, recomputed per read. Combined with "a failed probe is a fact, not a death certificate," this is what stops the classic bug where a flaky tmux has-session kills a live agent.
+
+2. TUI ↔ Chat interface handoff on the same native conversation. This is the most technically interesting piece (docs/architecture.md, "Session Interface Handoff"). You can move a running agent from its native terminal UI into structured chat and back — same session id, same worktree, same branch, same provider conversation id. It's implemented as a proper saga: CAS-fenced controller epochs, drain vs interrupt policies, a durable message outbox covering the no-controller gap, boot reconciliation for daemon death mid-handoff, and generation fencing so a stale controller's callbacks can't promote queued work. Critically it's capability-gated (AgentInterfaceHandoff in ports/agent.go) — only enabled once a harness's TUI resume id is proven to name the same conversation as its ACP id. Claude Code and Codex qualify; Cursor deliberately doesn't yet.
+
+3. Drain safety via rendered-viewport reading. To drain a TUI agent, AO reads the actual rendered terminal cell grid (styled capture-pane on tmux, a vt-go VT cell model in the PTY hosts) and requires repeated observations of an idle surface with an empty composer across a settle window. A visible unsent draft aborts the transition untouched. That's a genuinely unusual solution to "is this TUI agent safe to interrupt."
+
+4. The orchestrator is an agent that drives AO through AO's own CLI. backend/internal/skillassets/ embeds a using-ao skill into the daemon binary and installs it into ~/.ao/skills at boot, so any worker in any project has a stable absolute path to the ao spawn / ao send / ao review / ao browser catalog. The planning agent has a project-scoped persistent conversation and delegates by calling the same commands you would. Self-hosting rather than a bespoke agent-to-agent protocol.
+
+5. Breadth as an architectural claim, not a feature list. 38 agent adapters and 15 chat drivers behind one Agent interface with optional capability sub-interfaces (AgentAuthChecker, AgentBinaryResolver, AgentNativeSessionTerminator, AgentInterfaceHandoff, AgentInterfaceHandoffHistoryProbe). Harnesses opt into behavior they can prove they support instead of being forced into a lowest common denominator. AO never bundles a provider CLI — it reuses each harness's own binary, auth, and config resolution.
+
+6. The reviewer capability gateway (reviewgateway/, ADR 0002). A reviewer agent gets an AO-owned neutral filesystem — its own config/state/cache/temp roots and an immutable, hash-verified JSON manifest listing exactly which PR URLs and target SHAs it may review. The source checkout is deliberately absent from its working directory. That's a real capability-confinement design, not just "run the agent with a prompt." Paired with autoreview/, which triggers reviews on an idle-threshold policy with bounded retries per PR head.
+
+7. Detached provider hosts survive the app. Codex chat processes live in authenticated per-session hosts outside the daemon, so quitting the desktop app or an auto-update replacing the daemon reconnects to an in-flight turn instead of killing it.
+
+8. State containment as a hard rule. Everything under ~/.ao, including Electron's userData — no ~/Library/Application Support, ever. Rare discipline for an Electron app, and it makes the whole system trivially resettable and inspectable.
+
+---
+
+The honest summary: the novelty is in the invariants, not the components. Kanban-over-agents and worktree-per-task exist elsewhere. What doesn't is treating agent supervision as a distributed-systems problem — CAS fences, saga recovery, generation epochs, CDC, message outboxes, capability gates — applied to processes on your laptop.
