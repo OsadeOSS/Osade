@@ -416,12 +416,25 @@ export class LaunchTask {
       })
       .catch(() => ({ panes: [] as { pane_id: string }[] }));
 
-    for (const pane of panes.panes) {
+    // Close every pane but one. `worktree.remove` is addressed by workspace id, and herdr
+    // closes a workspace when its last pane goes — so closing them all leaves nothing to
+    // address and the call fails with `workspace_not_found`. One pane has to survive the
+    // removal.
+    const [survivor, ...doomed] = panes.panes;
+    for (const pane of doomed) {
       await this.#herdr.request('pane.close', { pane_id: pane.pane_id }).catch(() => {});
     }
 
-    // Give the PTYs a moment to actually exit and release the working directory.
-    await this.#waitForPanesToClose(task.herdr_workspace_id, 10_000);
+    // …and that survivor must not be sitting in the directory about to be deleted. A shell
+    // holds its working directory open, which on Windows makes the checkout undeletable and
+    // surfaces as `Permission denied` from `worktree.remove` even with force. `cd ~` is valid
+    // in both POSIX shells and PowerShell.
+    if (survivor) {
+      await this.#herdr
+        .request('pane.send_input', { pane_id: survivor.pane_id, text: 'cd ~\r' })
+        .catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
 
     await this.#herdr.request('worktree.remove', {
       workspace_id: task.herdr_workspace_id,
