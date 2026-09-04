@@ -7,6 +7,18 @@
  * OSADE.md §4.1 — the pinned schema is the only codegen source. Never hand-write a herdr
  * method name, and never derive one from backend/.
  */
-export * from './methods.js';
-export * from './pin.js';
-export * as HerdrSchema from './types.js';
+
+/* eslint-disable */
+
+export interface ErrorResponse {
+  error: ErrorBody;
+  id: string;
+}
+/**
+ * This interface was referenced by `ErrorResponse`'s JSON-Schema
+ * via the `definition` "ErrorBody".
+ */
+export interface ErrorBody {
+  code: string;
+  message: string;
+}

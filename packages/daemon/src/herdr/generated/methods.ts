@@ -7,7 +7,7 @@
  * OSADE.md §4.1 — the pinned schema is the only codegen source. Never hand-write a herdr
  * method name, and never derive one from backend/.
  */
-import type * as T from './types.js';
+import type * as T from './types/request.js';
 
 /** Every method name in the pinned schema. Derived, never typed by hand. */
 export type HerdrMethod =
