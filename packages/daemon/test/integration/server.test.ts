@@ -7,7 +7,9 @@ import { WebSocket } from 'ws';
 import type { ServerMessage } from '@osade/contract';
 
 import { openDb, type Db } from '../../src/db/index.js';
+import type { Gates } from '../../src/domain/gates.js';
 import type { LaunchTask } from '../../src/domain/launch-task.js';
+import type { VerifyRunner } from '../../src/domain/verify-run.js';
 import { startDaemonServer, type RunningDaemon } from '../../src/server/index.js';
 
 const NOW = 1_756_000_000_000;
@@ -29,12 +31,20 @@ function seedTask(id = 't1'): void {
 }
 
 const stubLauncher = {} as LaunchTask;
+const stubGates = {} as Gates;
+const stubVerifier = {} as VerifyRunner;
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'osade-test-'));
   process.env.OSADE_HOME = home;
   db = openDb(':memory:');
-  daemon = await startDaemonServer({ db, launcher: stubLauncher, now: () => NOW });
+  daemon = await startDaemonServer({
+    db,
+    launcher: stubLauncher,
+    gates: stubGates,
+    verifier: stubVerifier,
+    now: () => NOW,
+  });
 });
 
 afterEach(async () => {

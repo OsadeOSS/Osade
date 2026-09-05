@@ -60,7 +60,11 @@ export async function defaultBranch(repoPath: string): Promise<string> {
 }
 
 export interface DiffStat {
+  /** Tracked changes plus untracked files. What an undo would actually touch. */
   filesChanged: number;
+  /** Tracked-only, for display next to insertions/deletions. */
+  trackedChanged: number;
+  untracked: number;
   insertions: number;
   deletions: number;
   dirty: boolean;
@@ -78,16 +82,30 @@ export async function diffStat(worktreePath: string, baseSha: string): Promise<D
 
   let insertions = 0;
   let deletions = 0;
-  let filesChanged = 0;
+  let trackedChanged = 0;
   for (const line of numstat.split('\n')) {
     if (!line.trim()) continue;
     const [added, removed] = line.split('\t');
-    filesChanged++;
+    trackedChanged++;
     insertions += Number(added) || 0;
     deletions += Number(removed) || 0;
   }
 
-  return { filesChanged, insertions, deletions, dirty: porcelain.trim().length > 0 };
+  // `git diff` only sees tracked files, so an agent that created 30 new files reads as a diff
+  // of zero. Undo deletes those files (`clean -fd`), so they have to count towards the size
+  // that decides whether `gate.undo_turn` needs a human (§9.1).
+  const untracked = porcelain
+    .split('\n')
+    .filter((line) => line.startsWith('?? ')).length;
+
+  return {
+    filesChanged: trackedChanged + untracked,
+    trackedChanged,
+    untracked,
+    insertions,
+    deletions,
+    dirty: porcelain.trim().length > 0,
+  };
 }
 
 /**

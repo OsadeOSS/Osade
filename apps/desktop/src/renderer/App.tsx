@@ -2,7 +2,9 @@ import { useState, type JSX } from 'react';
 
 import type { TaskStatus, TaskView } from '@osade/contract';
 
+import { GateCard } from './GateCard.js';
 import { useLedger } from './useLedger.js';
+import { VerifyPlanReview } from './VerifyPlanReview.js';
 
 /**
  * The ledger — OSADE.md §19.
@@ -71,10 +73,30 @@ export function App(): JSX.Element {
   const rest = tasks.filter((t) => !t.needsYou);
   const selected = tasks.find((t) => t.task.id === selectedId) ?? null;
 
+  // §14.2 — gate requests are the top of the ledger, above everything else.
+  const openGates = tasks.flatMap((task) =>
+    task.openGates.filter((g) => g.decided_at == null).map((gate) => ({ gate, task })),
+  );
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 420px', height: '100%' }}>
       <main style={{ overflow: 'auto', borderRight: '1px solid var(--rule)' }}>
         <Header connection={connection} error={error} count={tasks.length} />
+
+        {openGates.length > 0 && (
+          <div style={{ padding: '14px 18px 4px' }}>
+            {openGates.map(({ gate, task }) => (
+              <GateCard
+                key={gate.id}
+                gate={gate}
+                task={task}
+                // §5.4 — no local mutation. The decision writes to the database and comes
+                // back over the websocket like every other change.
+                onDecided={() => {}}
+              />
+            ))}
+          </div>
+        )}
 
         {tasks.length === 0 ? (
           <Empty connection={connection} />
@@ -251,6 +273,11 @@ function Detail({ task }: { task: TaskView | null }): JSX.Element {
           degraded confidence: {task.agent?.probe_failures} failed probes
         </p>
       )}
+
+      <section style={{ marginTop: 18, borderTop: '1px solid var(--rule)', paddingTop: 12 }}>
+        <h2 style={{ fontSize: 'var(--t-s)', fontWeight: 600, margin: '0 0 4px' }}>Verification</h2>
+        <VerifyPlanReview taskId={task.task.id} />
+      </section>
 
       <button
         onClick={() => void window.osade?.openInHerdr()}

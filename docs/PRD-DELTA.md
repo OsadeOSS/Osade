@@ -538,6 +538,31 @@ capability reduction and is reported, not hidden. **Upstream issue candidate** �
 `platform::interactive_shell_command` should use the call operator with arguments rather than
 `Start-Process`.
 
+### 13a.2b The trust prompt must be answered by reading the selection, never by navigating blind
+
+*Found during M1, and the worst failure in this document so far.*
+
+§8.3's recipe — `pane.send_keys ["Down"]` then `["Enter"]` — is unsafe. Keystrokes sent while
+the TUI is still painting are **dropped silently**, and Claude Code's trust prompt defaults to
+`❯ No, exit`. A dropped `Down` therefore means `Enter` lands on *decline*, Claude exits, and
+the launch fails ninety seconds later with "never became interactive". Osade had declined the
+folder on the user's behalf and reported a timeout.
+
+**Correction to §8.3.** Read the selector out of the pane and only press Enter once the trust
+option is actually selected:
+
+```
+loop (bounded):
+  selection = trustSelection(pane.read visible)
+  if selection == null      → not a live prompt; stop
+  if selection == 'trust'   → send Enter; done
+  else                      → send Down, wait, re-read
+```
+
+`trustSelection` returns null when the option lines carry no `❯`, which distinguishes a live
+question from stale scrollback — acting on the latter sends keystrokes into a running agent.
+Never assume the default: the default is the dangerous one.
+
 ### 13a.3 Teardown ordering is the reverse of the obvious one
 
 `worktree.remove` is addressed by workspace id, and herdr closes a workspace when its last
@@ -548,6 +573,13 @@ undeletable on Windows (`Permission denied`, even with `force: true`).
 **Correction to §9 rule 6.** Close every pane *but one*, move that survivor out of the
 checkout (`cd ~`, valid in both POSIX shells and PowerShell), then remove. `force` overrides
 uncommitted changes, never live panes.
+
+And neither half of that can be a fixed sleep. The shell processes the `cd` asynchronously, and
+Windows does not reflect a released handle immediately, so a delay long enough on an idle
+machine is not long enough on a busy one — this failed intermittently until it waited on
+`pane.get`'s reported `cwd` leaving the checkout and then retried `worktree.remove` with
+backoff. A `Permission denied` from that call is usually transient rather than a refusal; a
+dirty checkout without `force` is a different error and must be rethrown at once.
 
 ---
 

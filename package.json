@@ -14,16 +14,20 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "herdr:codegen": "node scripts/generate-herdr-client.mjs",
-    "herdr:drift": "vite-node packages/daemon/src/herdr/drift-cli.ts --",
+    "herdr:drift": "vite-node packages/daemon/src/cli.ts -- drift",
     "herdr:codegen:check": "node scripts/generate-herdr-client.mjs --check",
-    "check": "pnpm herdr:codegen:check && pnpm -r typecheck && vitest run",
-    "test:e2e": "cross-env OSADE_E2E=1 vitest run packages/daemon/test/e2e"
+    "check": "pnpm herdr:codegen:check && pnpm lint && pnpm -r typecheck && vitest run",
+    "test:e2e": "cross-env OSADE_E2E=1 vitest run packages/daemon/test/e2e",
+    "lint": "eslint ."
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^22.10.2",
     "cross-env": "^10.1.0",
+    "eslint": "^9.39.5",
     "json-schema-to-typescript": "^15.0.3",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.69.0",
     "vite-node": "^6.0.0",
     "vitest": "^2.1.8"
   },

@@ -9,7 +9,9 @@ import { ClientMessage, type ServerMessage } from '@osade/contract';
 
 import type { Db } from '../db/index.js';
 import { pruneChangeLog } from '../db/index.js';
+import type { Gates } from '../domain/gates.js';
 import type { LaunchTask } from '../domain/launch-task.js';
+import type { VerifyRunner } from '../domain/verify-run.js';
 import { osadePaths } from '../paths.js';
 import { CdcBroadcaster } from './cdc-broadcaster.js';
 import { appRouter, type DaemonContext } from './router.js';
@@ -31,6 +33,8 @@ const CHANGE_LOG_PRUNE_INTERVAL_MS = 5 * 60_000;
 export interface DaemonServerOptions {
   db: Db;
   launcher: LaunchTask;
+  gates: Gates;
+  verifier: VerifyRunner;
   /** 0 asks the OS for a free port, which is the default and what the port file is for. */
   port?: number;
   now?: () => number;
@@ -51,7 +55,7 @@ export async function startDaemonServer(options: DaemonServerOptions): Promise<R
   const broadcaster = new CdcBroadcaster(db, { now });
   broadcaster.start();
 
-  const context: DaemonContext = { db, launcher, now };
+  const context: DaemonContext = { db, launcher, gates: options.gates, verifier: options.verifier, now };
   const trpcHandler = createHTTPHandler({
     router: appRouter,
     createContext: () => context,

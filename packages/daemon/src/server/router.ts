@@ -4,9 +4,12 @@ import { z } from 'zod';
 import { TaskId, TaskStatus, TaskView, isNeedsYou } from '@osade/contract';
 
 import type { Db } from '../db/index.js';
-import { getTaskFacts, listTaskFacts } from '../db/task-repo.js';
+import { getTask, getTaskFacts, listTaskFacts } from '../db/task-repo.js';
 import { deriveStatus } from '../domain/derive-status.js';
+import type { Gates } from '../domain/gates.js';
 import type { LaunchTask } from '../domain/launch-task.js';
+import { deriveVerifyPlan, type VerifyStep } from '../domain/verify-plan.js';
+import type { VerifyRunner } from '../domain/verify-run.js';
 
 /**
  * The tRPC router — OSADE.md §5.5.
@@ -18,6 +21,8 @@ import type { LaunchTask } from '../domain/launch-task.js';
 export interface DaemonContext {
   db: Db;
   launcher: LaunchTask;
+  gates: Gates;
+  verifier: VerifyRunner;
   now: () => number;
 }
 
@@ -134,6 +139,117 @@ export const appRouter = t.router({
     .output(z.object({ ok: z.literal(true) }))
     .mutation(({ ctx, input }) => {
       ctx.db.prepare('UPDATE task SET archived_at = ? WHERE id = ?').run(ctx.now(), input.taskId);
+      return { ok: true as const };
+    }),
+
+  // ── verification (§10) ───────────────────────────────────────────────────
+
+  /** Derives a plan and stores it. §10.1 — shown to the user before first use. */
+  verifyPlanDerive: t.procedure
+    .input(z.object({ taskId: TaskId }))
+    .output(
+      z.object({
+        steps: z.array(
+          z.object({
+            name: z.string(),
+            cmd: z.string(),
+            cwd: z.string(),
+            timeoutSec: z.number(),
+            required: z.boolean(),
+            source: z.enum(['ci', 'manifest', 'doc', 'user']),
+            evidence: z.string(),
+          }),
+        ),
+        needsReview: z.boolean(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const task = getTask(ctx.db, input.taskId);
+      if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'unknown task' });
+      const repo = ctx.db.prepare('SELECT path FROM repo WHERE id = ?').get(task.repo_id) as {
+        path: string;
+      };
+
+      const plan = await deriveVerifyPlan(repo.path);
+      ctx.db
+        .prepare(
+          `INSERT INTO verify_plan (repo_id, steps_json, needs_review, derived_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(repo_id) DO UPDATE SET steps_json = excluded.steps_json,
+                                              needs_review = excluded.needs_review,
+                                              derived_at = excluded.derived_at`,
+        )
+        .run(task.repo_id, JSON.stringify(plan.steps), plan.needsReview ? 1 : 0, ctx.now());
+      return plan;
+    }),
+
+  /** §10.1 — the user confirms (or edits) the plan. Only then may it run. */
+  verifyPlanConfirm: t.procedure
+    .input(z.object({ taskId: TaskId, steps: z.array(z.unknown()).optional() }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      const task = getTask(ctx.db, input.taskId);
+      if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'unknown task' });
+      if (input.steps) {
+        ctx.db
+          .prepare('UPDATE verify_plan SET steps_json = ? WHERE repo_id = ?')
+          .run(JSON.stringify(input.steps), task.repo_id);
+      }
+      ctx.db
+        .prepare('UPDATE verify_plan SET needs_review = 0, confirmed_at = ? WHERE repo_id = ?')
+        .run(ctx.now(), task.repo_id);
+      return { ok: true as const };
+    }),
+
+  verifyRun: t.procedure
+    .input(z.object({ taskId: TaskId }))
+    .output(z.object({ passed: z.boolean(), headSha: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const task = getTask(ctx.db, input.taskId);
+      if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'unknown task' });
+
+      const stored = ctx.db
+        .prepare('SELECT steps_json, needs_review FROM verify_plan WHERE repo_id = ?')
+        .get(task.repo_id) as { steps_json: string; needs_review: number } | undefined;
+      if (!stored) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'no verification plan yet' });
+      }
+
+      const plan = {
+        steps: JSON.parse(stored.steps_json) as VerifyStep[],
+        needsReview: stored.needs_review === 1,
+      };
+      const facts = getTaskFacts(ctx.db, input.taskId)!;
+      const head = facts.scm?.pr_head_sha ?? task.base_sha;
+
+      const report = await ctx.verifier.run(input.taskId, plan, head);
+      return { passed: report.passed, headSha: report.headSha };
+    }),
+
+  // ── gates (§14) ──────────────────────────────────────────────────────────
+
+  gateDecide: t.procedure
+    .input(z.object({ gateId: z.string(), decision: z.enum(['approve', 'deny']) }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      try {
+        ctx.gates.decide(input.gateId, input.decision);
+      } catch (err) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: (err as Error).message });
+      }
+      return { ok: true as const };
+    }),
+
+  /** §14.2 — editing rewrites the payload and re-hashes, so the edit is what is bound. */
+  gateEditAndApprove: t.procedure
+    .input(z.object({ gateId: z.string(), payload: z.unknown() }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      try {
+        ctx.gates.editAndApprove(input.gateId, input.payload);
+      } catch (err) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: (err as Error).message });
+      }
       return { ok: true as const };
     }),
 });

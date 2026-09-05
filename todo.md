@@ -1,36 +1,42 @@
 # todo
 
 ## M0 — complete
-- [x] typed herdr client generated from the pinned schema (`vendor/herdr/0.8.2-p20/`)
-- [x] boot drift check — protocol + method set, never the version string (§4.1.1)
-- [x] contract package: task, agent_fact, WS message union (§5.5)
-- [x] sqlite + forward-only migrations + change_log triggers + CDC broadcaster (§5.4)
-- [x] deriveStatus rows 4, 10, 11, 13, 14 + ordering property test (§6, §20.2)
-- [x] event subscriber as an N+1 connection manager + monotonic fact gate (§7.2, §5.4.1)
-- [x] daemon http/tRPC/ws on 127.0.0.1, port file handshake (§2.1)
-- [x] launch-task: prune → worktree → mirror → lane with env → subscribe → agent.start,
-      trust-prompt recovery, readiness wait, teardown (§8.2, §8.3, §9)
-- [x] `osade` CLI — same surface for humans and agents (§17)
-- [x] apps/desktop — userData redirect, supervisor (detached herdr + daemon), ledger + detail
-- [x] e2e: real herdr, real git fixture, one full task (§21 acceptance)
+The three-process spine, verified end to end against real herdr.
+See `docs/adr/0001-no-embedded-terminal-in-m0.md`.
 
-**Acceptance met.** `pnpm test:e2e` drives a real Claude Code session in an isolated worktree
-from `queued` to `awaiting_review`, entirely on herdr's detection, nothing polled, no status
-column. 64 unit/integration tests + 5 e2e.
+## M1 — complete
+- [x] Full `deriveStatus` table, rows 1–14, row-by-row and property tested
+- [x] §20.1 lint boundaries wired, with `test/unit/lint-rules.test.ts` proving each one fires
+- [x] Verify plan derived from evidence, `needsReview` until a human confirms (§10.1)
+- [x] Verify runner: `verify` lane, run rows written before the command, head+tail log capping
+- [x] Failure loop closed: first required failure stops the run and the tail goes to the agent
+- [x] Gates: §14.1 list, payload bound at request and re-checked at execution, edit-and-approve
+      re-hashing, 24h expiry that is not a denial, policy downgrades recorded
+- [x] Turn checkpoints + undo, scratch-index capture, stash-and-label, gate over 20 files
+- [x] Gate card at the top of the ledger; verify plan review UI
+- [x] 4 tasks in parallel on one repo, no cross-talk
+- [x] **M1 acceptance**: `implementing → verifying → verify_failed → implementing →
+      awaiting_review` against real herdr, unattended, with the commit blocked until approved
 
-## Next — M1 (§21)
-- [ ] Full deriveStatus table (rows 1–3, 5–9, 12)
-- [ ] Verify plan derivation from CI config, editable, `verify` lane, run rows, log capture
-- [ ] Failure loop: verify fails → log tail back into the agent lane
-- [ ] Gate requests: payload hashing, approve/deny/edit UI
-- [ ] Turn checkpoints + undo
-- [ ] 4 tasks in parallel on one repo, no cross-talk
+`pnpm check` — 133 tests. `pnpm test:e2e` — 12 tests, 4 consecutive clean runs.
+
+## Next — M2 (§21)
+- [ ] Issue import → task
+- [ ] Triage task type (§12): reproduce, bisect, failing test — terminates without a PR
+- [ ] scm polling with ETags and rate-limit backoff, fork-aware push, gated PR open
+- [ ] `review_changes_requested` loops back into the agent lane
+
+**M2 acceptance:** import a real issue from a repo you maintain; land one PR through the gate;
+run one triage task that produces a reproduction and no PR.
 
 ## Carried debt
-- [ ] Lint rules from §20.1 are documented but not wired (no ESLint config yet)
-- [ ] Electron app builds and typechecks; not yet launched end-to-end against a live daemon
+- [ ] Electron app builds, typechecks and lints; still not launched against a live daemon
 - [ ] `osade` CLI has no tests
-- [ ] e2e was flaky before the trust-prompt retry landed; watch it in CI
+- [ ] `VerifyRunner` recovers exit codes by echoing a sentinel into the lane. It works against
+      real herdr (proved in the M1 acceptance), but it is still the weakest seam. Revisit if
+      herdr ever exposes a run-and-report method.
+- [ ] `deriveVerifyPlan` records CI config as corroboration but does not parse workflow YAML;
+      §13.2 rates CI the strongest evidence there is, so M3 should read it properly
 
 ## Release blockers (THIRD-PARTY-NOTICES.md)
 - [ ] fetch herdr's LICENSE + NOTICE from the pinned tag into vendor/herdr/0.8.2-p20/
@@ -42,6 +48,9 @@ column. 64 unit/integration tests + 5 e2e.
       Windows rather than `Start-Process`, which cannot execute npm shims (PRD-DELTA #13a.2)
 - [ ] `events.subscribe` replays the ring buffer despite starting at `current_sequence()`
       (PRD-DELTA #5)
+- [ ] `worktree.remove` closes the workspace before deleting the directory, so a failed delete
+      leaves an unaddressable workspace and the retry reports `workspace_not_found` instead of
+      the real error (PRD-DELTA #13a.3)
 
 ## Repo hygiene (PRD-DELTA #14)
 - [ ] move herdr's AGENTS.md, .github/ and .agents/skills/herdr-* under backend/

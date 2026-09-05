@@ -1,7 +1,10 @@
 import { mkdirSync } from 'node:fs';
 
 import { openDb } from './db/index.js';
+import { Checkpoints } from './domain/checkpoints.js';
+import { Gates } from './domain/gates.js';
 import { LaunchTask } from './domain/launch-task.js';
+import { VerifyRunner } from './domain/verify-run.js';
 import { HerdrClient } from './herdr/client.js';
 import { assertNoDrift, HerdrDriftError } from './herdr/drift-check.js';
 import { HerdrEventSubscriber } from './herdr/event-subscriber.js';
@@ -57,7 +60,20 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const db = openDb(paths.db);
   const herdr = new HerdrClient();
   const subscriber = new HerdrEventSubscriber(db, herdr, { now: options.now, onWarning });
-  const launcher = new LaunchTask(db, herdr, subscriber, { now: options.now, onWarning });
+  const checkpoints = new Checkpoints(db, { now: options.now, onWarning });
+  const launcher = new LaunchTask(db, herdr, subscriber, {
+    now: options.now,
+    onWarning,
+    checkpoints,
+  });
+  const gates = new Gates(db, { now: options.now });
+  // §10.2 — the failure loop. Wired here rather than inside the runner so the dependency
+  // points one way: the runner knows nothing about launching.
+  const verifier = new VerifyRunner(db, herdr, {
+    now: options.now,
+    onWarning,
+    sendToAgent: (taskId, text) => launcher.prompt(taskId, text, false),
+  });
 
   // A herdr that is not running is not an error at boot: agents survive the app, but the app
   // also has to start when nothing is running yet. The subscriber reconciles when it can.
@@ -68,6 +84,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const server = await startDaemonServer({
     db,
     launcher,
+    gates,
+    verifier,
     port: options.port,
     now: options.now,
     onWarning,

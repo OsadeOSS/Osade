@@ -179,10 +179,52 @@ CREATE TABLE change_log (
 CREATE INDEX change_log_seq_idx ON change_log(seq);
 `;
 
+/**
+ * M1 — the verify plan per repo, and lane bindings per task.
+ *
+ * `verify_plan` is stored per repo and carries `needs_review`: §10.1 is explicit that an
+ * inferred command is never run silently the first time, so the flag is part of the durable
+ * record rather than a UI state.
+ *
+ * `task_lane` records which herdr tab is which. Deliberately a separate table rather than
+ * columns on `task`: lanes are created lazily (`verify` on first run, §8.2 step 4) and a row
+ * that appears later is cleaner than a column that is null until it is not.
+ */
+const M002_VERIFY = `
+CREATE TABLE verify_plan (
+  repo_id     TEXT PRIMARY KEY REFERENCES repo(id) ON DELETE CASCADE,
+  steps_json  TEXT NOT NULL,
+  -- §10.1 the plan is shown to the user and editable before first use.
+  needs_review INTEGER NOT NULL DEFAULT 1,
+  derived_at  INTEGER NOT NULL,
+  confirmed_at INTEGER
+);
+
+CREATE TABLE task_lane (
+  task_id TEXT NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+  lane    TEXT NOT NULL,
+  value   TEXT NOT NULL,
+  PRIMARY KEY (task_id, lane)
+);
+
+-- §10.2 verification is required before gate.pr_open can be approved. That is a policy
+-- default, overridable per repo, and the override is recorded rather than silent.
+ALTER TABLE repo ADD COLUMN verify_required_for_pr INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE repo ADD COLUMN verify_override_reason TEXT;
+
+-- §9 rule 5 — gitignored-but-needed paths mirrored into every worktree.
+ALTER TABLE repo ADD COLUMN mirror_paths_json TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     id: 1,
     name: 'core tables, facts, change_log',
     sql: M001_CORE + CDC_TABLES.map(cdcTriggers).join('\n'),
+  },
+  {
+    id: 2,
+    name: 'verify plan, task lanes, repo verification policy',
+    sql: M002_VERIFY,
   },
 ];

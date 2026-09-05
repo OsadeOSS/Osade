@@ -1,14 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { platform } from 'node:os';
 import { basename, join } from 'node:path';
 
 import type { Db } from '../db/index.js';
 import { getTask } from '../db/task-repo.js';
-import { HerdrApiError, type HerdrClient } from '../herdr/client.js';
+import {
+  HerdrApiError,
+  type HerdrClient,
+  type HerdrMethodParams,
+} from '../herdr/client.js';
 import type { HerdrEventSubscriber } from '../herdr/event-subscriber.js';
 import { worktreePathFor } from '../paths.js';
 import { agentEntry, hasCapability } from './agent-catalog.js';
+import type { Checkpoints } from './checkpoints.js';
 import {
   DEFAULT_MIRROR_PATHS,
   defaultBranch,
@@ -74,6 +80,11 @@ export interface LaunchTaskOptions {
   now?: () => number;
   defaultAgent?: string;
   onWarning?: (message: string) => void;
+  /**
+   * §9.1 — turn checkpoints. Optional so a caller that does not want undo history can skip
+   * it; when present, launch captures one and a capture failure never fails the launch.
+   */
+  checkpoints?: Checkpoints;
 }
 
 /**
@@ -104,6 +115,7 @@ export class LaunchTask {
   readonly #now: () => number;
   readonly #defaultAgent: string;
   readonly #onWarning: (message: string) => void;
+  readonly #checkpoints: Checkpoints | null;
 
   constructor(
     db: Db,
@@ -117,6 +129,7 @@ export class LaunchTask {
     this.#now = options.now ?? Date.now;
     this.#defaultAgent = options.defaultAgent ?? 'claude';
     this.#onWarning = options.onWarning ?? (() => {});
+    this.#checkpoints = options.checkpoints ?? null;
   }
 
   /** Registers a repo and a task row. No herdr calls, no worktree — that is `launch`. */
@@ -276,7 +289,10 @@ export class LaunchTask {
       const resolvedTrustPrompt = ready.resolvedTrustPrompt;
 
       // 8. Best-effort checkpoint. §9.1 — a capture failure never fails a launch.
-      this.#captureCheckpoint(taskId, task.base_sha, 'launch');
+      // §8.2 step 8 / §9.1 — best-effort, and `Checkpoints.capture` never throws.
+      // Delegated rather than inlined: two implementations of "record a checkpoint" produced
+      // two rows for one launch, which the M1 acceptance test caught.
+      await this.#checkpoints?.capture(taskId, 'launch');
 
       return {
         workspaceId,
@@ -368,21 +384,16 @@ export class LaunchTask {
       lastOutput = await this.#readPane(paneId);
 
       // §8.3 — matched narrowly on purpose. Any other blocked state is §6 row 4, and
-      // answering that on the user's behalf is the one thing this must not do.
-      //
-      // Re-answered while the prompt is still on screen rather than latched after one attempt:
-      // keystrokes sent in the window between the text rendering and the selector accepting
-      // input are simply dropped, which showed up as an intermittent 90s launch timeout.
-      // Bounded so a prompt we are misreading cannot turn into an infinite keystroke loop.
+      // answering that on the user's behalf is the one thing this must not do. The live
+      // selector must be on screen too: the prompt text alone can be stale scrollback from a
+      // prompt that was already answered.
       if (
         answerAttempts < MAX_TRUST_PROMPT_ANSWERS &&
-        TRUST_PROMPT_MATCHES.some((m) => lastOutput.includes(m))
+        TRUST_PROMPT_MATCHES.some((m) => lastOutput.includes(m)) &&
+        trustSelection(lastOutput) != null
       ) {
-        // "❯ No, exit" is selected by default, so Down then Enter picks the trust option.
-        await this.#herdr.request('pane.send_keys', { pane_id: paneId, keys: ['Down'] });
-        await this.#herdr.request('pane.send_keys', { pane_id: paneId, keys: ['Enter'] });
         answerAttempts++;
-        resolvedTrustPrompt = true;
+        if (await this.#answerTrustPrompt(paneId)) resolvedTrustPrompt = true;
         // Give the TUI time to repaint before deciding whether the prompt is really gone.
         await new Promise((resolve) => setTimeout(resolve, 1_500));
         continue;
@@ -392,6 +403,39 @@ export class LaunchTask {
     }
 
     return { interactive: false, resolvedTrustPrompt, lastOutput };
+  }
+
+  /**
+   * Answers the trust prompt by **confirming the selection moved before committing it**.
+   *
+   * Sending `Down` then `Enter` blind is wrong, and the failure is bad: keystrokes sent while
+   * the TUI is still painting are dropped, so a dropped `Down` leaves "❯ No, exit" selected and
+   * `Enter` then *exits Claude*. That looked like an intermittent 90-second launch timeout and
+   * was actually Osade declining the folder on the user's behalf.
+   *
+   * So each `Down` is verified against a re-read of the pane, and `Enter` is only sent once the
+   * trust option is actually selected. Returns false if it never gets there — the human should
+   * see that, not have it guessed at.
+   */
+  async #answerTrustPrompt(paneId: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const selection = trustSelection(await this.#readPane(paneId));
+      if (selection == null) return false;
+
+      if (selection === 'trust') {
+        await this.#herdr.request('pane.send_keys', { pane_id: paneId, keys: ['Enter'] });
+        return true;
+      }
+
+      await this.#herdr.request('pane.send_keys', { pane_id: paneId, keys: ['Down'] });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    this.#onWarning(
+      `pane ${paneId}: could not move the trust prompt selection onto the trust option; ` +
+        `leaving it for a human rather than guessing`,
+    );
+    return false;
   }
 
   async #readPane(paneId: string): Promise<string> {
@@ -449,13 +493,13 @@ export class LaunchTask {
       await this.#herdr
         .request('pane.send_input', { pane_id: survivor.pane_id, text: 'cd ~\r' })
         .catch(() => {});
-      await new Promise((resolve) => setTimeout(resolve, 750));
+      // Wait on the observed cwd rather than on a fixed delay: the shell processes the `cd`
+      // asynchronously, and a sleep that is long enough on an idle machine is not long enough
+      // on a busy one.
+      await this.#waitForCwdOutside(survivor.pane_id, task.worktree_path, 10_000);
     }
 
-    await this.#herdr.request('worktree.remove', {
-      workspace_id: task.herdr_workspace_id,
-      force: options.force ?? false,
-    });
+    await this.#removeWorktree(task.herdr_workspace_id, task.worktree_path, options.force ?? false);
 
     this.#db.prepare('UPDATE task SET herdr_workspace_id = NULL WHERE id = ?').run(taskId);
     this.#db
@@ -463,18 +507,131 @@ export class LaunchTask {
       .run(taskId);
   }
 
+  /** Polls the pane's reported cwd until it is no longer inside the checkout. */
+  async #waitForCwdOutside(paneId: string, worktreePath: string, timeoutMs: number): Promise<void> {
+    const target = worktreePath.replace(/\\/g, '/').toLowerCase();
+    const deadline = this.#now() + timeoutMs;
+
+    while (this.#now() < deadline) {
+      const info = await this.#herdr
+        .request<'pane.get', { pane: { cwd?: string | null } }>(
+          'pane.get',
+          { pane_id: paneId },
+          5_000,
+        )
+        .catch(() => null);
+
+      const cwd = info?.pane.cwd?.replace(/\\/g, '/').toLowerCase() ?? '';
+      if (cwd === '' || !cwd.startsWith(target)) return;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    this.#onWarning(`pane ${paneId} is still inside ${worktreePath}; removal may fail`);
+  }
+
+  /**
+   * Removes the checkout, retrying while the OS still holds it.
+   *
+   * On Windows a handle released by an exiting process is not immediately reflected, so
+   * `Permission denied` here is usually transient rather than a real refusal. Retried a few
+   * times with backoff; a genuine refusal — a dirty checkout without `force` — is a different
+   * error and is rethrown at once.
+   *
+   * **`worktree.remove` is not atomic.** herdr closes the workspace first and deletes the
+   * directory second, so a transient `Permission denied` leaves the workspace already gone. A
+   * naive retry then fails with `workspace_not_found` and reports *that* instead of the real
+   * problem. So after the first attempt the absence of the workspace is evidence, not an
+   * error: if the directory is gone the removal finished, and if it is still there the removal
+   * half-succeeded and says so plainly.
+   */
+  async #removeWorktree(
+    workspaceId: string,
+    worktreePath: string,
+    force: boolean,
+  ): Promise<void> {
+    const attempts = 5;
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await this.#herdr.request('worktree.remove', { workspace_id: workspaceId, force });
+        return;
+      } catch (err) {
+        const message = err instanceof HerdrApiError ? err.message : String(err);
+
+        if (attempt > 1 && /workspace_not_found/i.test(message)) {
+          // herdr's registration is gone; only the directory is left. Its own removal already
+          // ran, so finishing the job is no longer worktree *lifecycle* — it is deleting a
+          // leftover directory, which §1's carve-out covers.
+          await this.#reapLeftoverCheckout(worktreePath);
+          return;
+        }
+
+        const transient = /permission denied|being used by another/i.test(message);
+        if (!transient || attempt === attempts) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      }
+    }
+  }
+
+  /**
+   * Deletes a checkout herdr has already deregistered.
+   *
+   * A just-exited PTY can hold its working directory for a moment on Windows, so the directory
+   * outlives the workspace. Waited on rather than slept through, then removed, then pruned so
+   * git's registration does not outlive the directory either (§9 rule 3 in reverse).
+   */
+  async #reapLeftoverCheckout(worktreePath: string): Promise<void> {
+    const deadline = this.#now() + 10_000;
+    while (this.#now() < deadline) {
+      if (!existsSync(worktreePath)) return;
+      try {
+        await rm(worktreePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+        if (!existsSync(worktreePath)) return;
+      } catch {
+        // Still held. Wait and try again until the deadline.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    this.#onWarning(
+      `herdr removed the workspace for ${worktreePath} but the directory is still on disk; ` +
+        `something outside Osade is holding it open. Run \`git worktree prune\` after it frees.`,
+    );
+  }
+
+  /**
+   * Sends a prompt into the task's agent lane.
+   *
+   * `wait` is retried once on `agent_prompt_stalled`: herdr requires an observed state change
+   * within 5s of a submission from a non-working state, and an agent that has just gone idle
+   * can miss that window without anything being wrong. A second submission is safe because the
+   * first one was rejected before any input was sent.
+   */
   async prompt(taskId: string, text: string, wait: boolean): Promise<void> {
     const paneId = this.#paneFor(taskId);
     if (!paneId) throw new Error(`task ${taskId} has no live agent pane`);
 
     // §4.2 — prefer one blocking call over prompt-then-poll: each connection is a herdr thread.
-    await this.#herdr.request(
-      'agent.prompt',
-      wait
-        ? { target: paneId, text, wait: { until: ['idle', 'done', 'blocked'], timeout_ms: 300_000 } }
-        : { target: paneId, text },
-      wait ? 310_000 : 30_000,
-    );
+    const params: HerdrMethodParams['agent.prompt'] = wait
+      ? {
+          target: paneId,
+          text,
+          // Any settled state ends the wait; §6.1 decides what each one means, not this call.
+          wait: { until: ['idle', 'done', 'blocked'], timeout_ms: 300_000 },
+        }
+      : { target: paneId, text };
+    const timeout = wait ? 310_000 : 30_000;
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await this.#herdr.request('agent.prompt', params, timeout);
+        return;
+      } catch (err) {
+        const stalled = err instanceof HerdrApiError && err.code === 'agent_prompt_stalled';
+        if (!stalled || attempt === 2) throw err;
+        this.#onWarning(`prompt to ${taskId} stalled on submission; retrying once`);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
   }
 
   /** §4.4.1 — the only screen content the pinned schema exposes. On demand, at most 1 Hz. */
@@ -546,26 +703,6 @@ export class LaunchTask {
     return row?.herdr_pane_id ?? null;
   }
 
-  #captureCheckpoint(taskId: string, sha: string, trigger: string): void {
-    try {
-      this.#db
-        .prepare(
-          `INSERT INTO turn_checkpoint (id, task_id, ref_name, sha, captured_at, trigger)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          `c_${randomUUID().slice(0, 8)}`,
-          taskId,
-          `refs/osade/turns/${taskId}/0`,
-          sha,
-          this.#now(),
-          trigger,
-        );
-    } catch (err) {
-      this.#onWarning(`checkpoint capture failed for ${taskId}: ${(err as Error).message}`);
-    }
-  }
-
   /**
    * §8.2 step 5 / §13.5 — render the launch context into the worktree.
    *
@@ -593,6 +730,17 @@ export class LaunchTask {
     return path;
   }
 
+  /**
+   * Registers a repo, once, under concurrency.
+   *
+   * A check-then-insert is a race here: `defaultBranch` is async, so four concurrent
+   * `createTask` calls all observe no row, all try to insert, and three die on
+   * `UNIQUE constraint failed: repo.path`. That is not hypothetical — it is what four parallel
+   * tasks on one repo do, and it is what `test/integration/parallel-tasks.test.ts` caught.
+   *
+   * The async work happens first, then a single atomic upsert: sqlite serializes statements, so
+   * `ON CONFLICT DO NOTHING` followed by a read is race-free without a lock of our own.
+   */
   async #ensureRepo(repoPath: string): Promise<string> {
     const existing = this.#db.prepare('SELECT id FROM repo WHERE path = ?').get(repoPath) as
       | { id: string }
@@ -600,13 +748,18 @@ export class LaunchTask {
     if (existing) return existing.id;
 
     const branch = await defaultBranch(repoPath);
-    const repoId = `r_${randomUUID().slice(0, 8)}`;
+
     this.#db
       .prepare(
-        'INSERT INTO repo (id, path, default_branch, created_at) VALUES (?, ?, ?, ?)',
+        `INSERT INTO repo (id, path, default_branch, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(path) DO NOTHING`,
       )
-      .run(repoId, repoPath, branch, this.#now());
-    return repoId;
+      .run(`r_${randomUUID().slice(0, 8)}`, repoPath, branch, this.#now());
+
+    const row = this.#db.prepare('SELECT id FROM repo WHERE path = ?').get(repoPath) as {
+      id: string;
+    };
+    return row.id;
   }
 }
 
@@ -628,4 +781,31 @@ function slugify(title: string): string {
  */
 export function agentStartArgsSupported(): boolean {
   return platform() !== 'win32';
+}
+
+/**
+ * Which option the trust prompt currently has selected, or null when no live selector is on
+ * screen.
+ *
+ * Claude Code marks the selection with `❯`. Reading it — rather than assuming the default and
+ * navigating blind — is what makes answering the prompt safe: the alternative failure mode is
+ * pressing Enter on "No, exit".
+ */
+export function trustSelection(paneText: string): 'trust' | 'decline' | null {
+  let sawOption = false;
+  let selected: 'trust' | 'decline' | null = null;
+
+  for (const line of paneText.split('\n')) {
+    const isTrust = /yes,\s*i trust/i.test(line);
+    const isDecline = /\bno,\s*exit\b/i.test(line);
+    if (!isTrust && !isDecline) continue;
+
+    sawOption = true;
+    if (line.includes('❯') || line.trimStart().startsWith('>')) {
+      selected = isTrust ? 'trust' : 'decline';
+    }
+  }
+
+  // Options with no selector means the prompt is scrollback, not a live question.
+  return sawOption ? selected : null;
 }

@@ -2,6 +2,12 @@ import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 
 import type { HerdrMethod, HerdrMethodParams } from './generated/index.js';
+
+/**
+ * Re-exported so callers can name a params shape without importing the generated client
+ * directly — §4.2 restricts the *generated* module, not the facade.
+ */
+export type { HerdrMethod, HerdrMethodParams } from './generated/index.js';
 import { herdrApiSocketPath, OSADE_SESSION, toConnectTarget } from './socket-path.js';
 
 /**

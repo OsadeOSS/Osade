@@ -1084,13 +1084,24 @@ worktree: `agent.start` returned `agent_not_ready` and herdr's detector classifi
 `blocked` — correctly, with no Osade screen-scraping. The verified recipe, entirely within
 herdr's API:
 
+*Corrected 2026-09-05 per PRD-DELTA #13a.2b — the original recipe here was unsafe.*
+
+**INVARIANT — read the selection; never navigate blind.** Keystrokes sent while the TUI is
+still painting are dropped silently, and the prompt defaults to `❯ No, exit`. A dropped `Down`
+therefore puts `Enter` on *decline*: Claude exits, and the launch fails ninety seconds later
+looking like a timeout. Osade will have declined the folder on the user's behalf and reported
+something else.
+
 ```
-pane.wait_for_output { pane_id, source: "visible", timeout_ms: 15000,
-                       match: { type: "substring", value: "Is this a project you created" } }
-pane.send_keys       { pane_id, keys: ["Down"] }
-pane.send_keys       { pane_id, keys: ["Enter"] }
-agent.wait           { target, until: ["idle"], timeout_ms: 30000 }
+loop (bounded, ~5 attempts):
+  selection = read the selector out of pane.read { source: "visible" }
+  null      → no live prompt (options with no ❯ are stale scrollback); stop
+  'trust'   → pane.send_keys { keys: ["Enter"] }; done
+  'decline' → pane.send_keys { keys: ["Down"] }, wait, re-read
 ```
+
+Then wait for `agent.get` to report `interactive_ready` (§8.2). If the selection never reaches
+the trust option, **stop and leave it for a human** rather than pressing Enter hopefully.
 
 **Match the specific prompt; never auto-confirm a `blocked` state generically.** Any other
 `blocked` is §6 row 4 — the user is being asked something, and answering it for them is the
