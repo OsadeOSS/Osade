@@ -1033,6 +1033,23 @@ at most one agent.
 8. Capture a `turn_checkpoint` with trigger `launch`. Best-effort — **a checkpoint capture
    failure never fails a launch.**
 
+*Corrected 2026-09-05 per PRD-DELTA #13a, found while implementing M0.*
+
+**INVARIANT — `agent.start` is submission, not readiness.** It can return success immediately
+with `launch_pending: true` and `agent_status: unknown`, before the agent has rendered
+anything; or it can return `agent_not_ready` because herdr's detector saw the trust prompt.
+Neither outcome tells you the agent is usable. Step 7 is therefore followed by a bounded wait
+on `agent.get` for `interactive_ready && !launch_pending`, answering the trust prompt if it
+appears during that wait — one loop, one deadline, because the two interleave. Launch does not
+report success until that wait passes; otherwise the very next `agent.prompt` fails.
+
+**Windows: `agent.start` cannot carry args.** herdr submits args through PowerShell's
+`Start-Process -FilePath`, which cannot execute an extensionless npm shim — and most agent
+CLIs on Windows are npm shims. The pane shows `%1 is not a valid Win32 application`, no agent
+appears, and the call still reports success. So on Windows the agent starts **bare** and the
+launch context is delivered through `<worktree>/.osade/CONTEXT.md` per §13.5. Mode args are
+lost; report that rather than hiding it.
+
 **Error codes from step 7 need distinct handling; only the first is routine**
 (`backend/src/app/agents.rs:228-260`):
 
@@ -1125,6 +1142,13 @@ user work by getting them wrong:
    explicit force with a typed confirmation.
    — **herdr's.** `worktree.remove` refuses a dirty checkout without `force`
    (`backend/src/worktree.rs:214`) and recovers from leftover checkouts (`:343`).
+   — *Corrected 2026-09-05 per PRD-DELTA #13a.3.* **The teardown order is the reverse of the
+   obvious one.** `worktree.remove` is addressed by workspace id, and herdr closes a workspace
+   when its last pane closes — so closing every pane first leaves nothing to address
+   (`workspace_not_found`), while leaving a live shell inside the checkout makes the directory
+   undeletable on Windows (`Permission denied`, even with `force`). Close every pane **but
+   one**, move that survivor out of the checkout (`cd ~` works in both POSIX shells and
+   PowerShell), then remove. `force` overrides uncommitted changes, never live panes.
 
 Path layout: `~/.osade/worktrees/<repo_slug>/<task_id>/`.
 

@@ -94,6 +94,9 @@ const TRUST_PROMPT_MATCHES: readonly string[] = [
   'do you trust this folder',
 ];
 
+/** How many times a visible trust prompt is answered before we stop and let a human see it. */
+const MAX_TRUST_PROMPT_ANSWERS = 3;
+
 export class LaunchTask {
   readonly #db: Db;
   readonly #herdr: HerdrClient;
@@ -346,6 +349,7 @@ export class LaunchTask {
   ): Promise<{ interactive: boolean; resolvedTrustPrompt: boolean; lastOutput: string }> {
     const deadline = this.#now() + timeoutMs;
     let resolvedTrustPrompt = false;
+    let answerAttempts = 0;
     let lastOutput = '';
 
     while (this.#now() < deadline) {
@@ -365,11 +369,23 @@ export class LaunchTask {
 
       // §8.3 — matched narrowly on purpose. Any other blocked state is §6 row 4, and
       // answering that on the user's behalf is the one thing this must not do.
-      if (!resolvedTrustPrompt && TRUST_PROMPT_MATCHES.some((m) => lastOutput.includes(m))) {
+      //
+      // Re-answered while the prompt is still on screen rather than latched after one attempt:
+      // keystrokes sent in the window between the text rendering and the selector accepting
+      // input are simply dropped, which showed up as an intermittent 90s launch timeout.
+      // Bounded so a prompt we are misreading cannot turn into an infinite keystroke loop.
+      if (
+        answerAttempts < MAX_TRUST_PROMPT_ANSWERS &&
+        TRUST_PROMPT_MATCHES.some((m) => lastOutput.includes(m))
+      ) {
         // "❯ No, exit" is selected by default, so Down then Enter picks the trust option.
         await this.#herdr.request('pane.send_keys', { pane_id: paneId, keys: ['Down'] });
         await this.#herdr.request('pane.send_keys', { pane_id: paneId, keys: ['Enter'] });
+        answerAttempts++;
         resolvedTrustPrompt = true;
+        // Give the TUI time to repaint before deciding whether the prompt is really gone.
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        continue;
       }
 
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -445,18 +461,6 @@ export class LaunchTask {
     this.#db
       .prepare('UPDATE agent_fact SET pane_alive = 0, herdr_pane_id = NULL WHERE task_id = ?')
       .run(taskId);
-  }
-
-  async #waitForPanesToClose(workspaceId: string, timeoutMs: number): Promise<void> {
-    const deadline = this.#now() + timeoutMs;
-    while (this.#now() < deadline) {
-      const result = await this.#herdr
-        .request<'pane.list', { panes: unknown[] }>('pane.list', { workspace_id: workspaceId })
-        .catch(() => null);
-      // A missing workspace means herdr already tore it down with its last pane.
-      if (result == null || result.panes.length === 0) return;
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
   }
 
   async prompt(taskId: string, text: string, wait: boolean): Promise<void> {

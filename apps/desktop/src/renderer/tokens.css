@@ -1,0 +1,78 @@
+/*
+ * Design tokens — OSADE.md §19.2.
+ *
+ * Light-first, which is itself a differentiator in a category that is uniformly dark. Dark
+ * ships as a full peer, not an afterthought.
+ *
+ * State colours appear ONLY as state, never as decoration or branding. Borders and rules carry
+ * information: a rule separates lanes of meaning, it never decorates. Zero shadows anywhere.
+ */
+
+:root {
+  --paper: #f6f7f4;
+  --ink: #191c1a;
+  --ink-soft: #5c6360;
+  --rule: #d7dcd6;
+  --field: #eceee9;
+
+  --st-needs: #a85b12;
+  --st-live: #2c6b4f;
+  --st-fail: #97302e;
+  --st-rest: #6e7772;
+
+  /* §19.2 — IBM Plex, chosen because the whole product is a record of machine work. */
+  --sans:
+    'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, monospace;
+
+  /* Scale: 11 / 13 / 15 / 19 / 25. */
+  --t-xs: 11px;
+  --t-s: 13px;
+  --t-m: 15px;
+  --t-l: 19px;
+  --t-xl: 25px;
+
+  /* One radius, on interactive controls only. Surfaces are square. */
+  --radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #141715;
+    --ink: #e8ebe7;
+    --ink-soft: #9aa39e;
+    --rule: #2b302d;
+    --field: #1b1f1d;
+
+    --st-needs: #d9903f;
+    --st-live: #5aa87e;
+    --st-fail: #cf6a67;
+    --st-rest: #8b948f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--t-s);
+  /* Tabular numerals everywhere numbers align (§19.2). */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+}

@@ -493,6 +493,64 @@ descriptor (`backend/src/ipc.rs:156`).
 
 ---
 
+## 13a. COSTLY — `agent.start` is not a readiness signal, and on Windows it cannot carry args
+
+*Found during M0 implementation, against herdr `0.8.2-p20`. Both were invisible from the
+schema and only appeared when a real agent was launched.*
+
+### 13a.1 `agent.start` returning does not mean the agent is usable
+
+It resolves either way and neither outcome is trustworthy:
+
+- **Success, immediately**, with `launch_pending: true` and `agent_status: unknown`, before
+  the agent has rendered anything. A `agent.prompt` issued straight after fails with
+  `agent_not_ready: agent w2:p2 is not an active named agent`.
+- **`agent_not_ready`**, when herdr's own detector saw `blocked` during startup — which for a
+  fresh worktree is almost always the trust prompt, i.e. not a failure at all.
+
+**Correction to §8.2.** Treat `agent.start` as *submission*, not as a barrier. Readiness is
+established afterwards by polling `agent.get` for `interactive_ready && !launch_pending`
+against a hard deadline, answering the trust prompt if it appears during that wait. The two
+outcomes interleave rather than sequence — the prompt may already be on screen when the call
+returns, or arrive a second later — so one loop handles both.
+
+The keystroke answer must be **re-sent while the prompt is still visible**, bounded (3
+attempts). Keys sent between the text rendering and the selector accepting input are dropped
+silently, which showed up as an intermittent 90-second launch timeout.
+
+### 13a.2 On Windows, `agent.start` args break npm-shim agents
+
+With no args herdr submits `& claude` and the agent starts. With args it submits:
+
+```powershell
+$p=Start-Process -FilePath claude -ArgumentList '--permission-mode acceptEdits' -NoNewWindow -Wait -PassThru
+Start-Process : This command cannot be run due to the error: %1 is not a valid Win32 application.
+```
+
+`Start-Process -FilePath` cannot execute an extensionless npm shim, and most agent CLIs on
+Windows are npm shims. The pane shows the error, no agent ever appears, and `agent.start`
+reports success — a silent launch failure.
+
+**Correction to §8.1/§8.2.** On Windows, start the agent bare and deliver the launch context
+through `<worktree>/.osade/CONTEXT.md`, which §13.5 already prescribes for agents without
+system-prompt injection. Mode args (`--permission-mode`) are lost there; that is a real
+capability reduction and is reported, not hidden. **Upstream issue candidate** — herdr's
+`platform::interactive_shell_command` should use the call operator with arguments rather than
+`Start-Process`.
+
+### 13a.3 Teardown ordering is the reverse of the obvious one
+
+`worktree.remove` is addressed by workspace id, and herdr closes a workspace when its last
+pane closes. So closing every pane first leaves nothing to address
+(`workspace_not_found`), while leaving a live shell in the worktree makes the directory
+undeletable on Windows (`Permission denied`, even with `force: true`).
+
+**Correction to §9 rule 6.** Close every pane *but one*, move that survivor out of the
+checkout (`cd ~`, valid in both POSIX shells and PowerShell), then remove. `force` overrides
+uncommitted changes, never live panes.
+
+---
+
 ## 14. HYGIENE — the instruction files fight each other
 
 - `docs/CLAUDE.md` is not auto-loaded. Claude Code reads `CLAUDE.md` from the

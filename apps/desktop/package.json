@@ -1,0 +1,25 @@
+{
+  "name": "@osade/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/main/electron.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build": "pnpm build:main && pnpm build:renderer",
+    "start": "pnpm build && electron ."
+  },
+  "dependencies": {
+    "@osade/contract": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vite": "^6.0.5"
+  }
+}
