@@ -47,18 +47,11 @@ function clientSocketPath(session: string): string {
  * runtime's pin.json; everything they point at is Osade's. Kept in step with the daemon's copy.
  */
 export function runtimeEnv(session = OSADE_SESSION): Record<string, string> {
-  const values = {
-    SESSION: session,
-    SOCKET_PATH: substrateSocketPath(session),
-    CLIENT_SOCKET_PATH: clientSocketPath(session),
+  return {
+    [runtimeVariable('SESSION')]: session,
+    [runtimeVariable('SOCKET_PATH')]: substrateSocketPath(session),
+    [runtimeVariable('CLIENT_SOCKET_PATH')]: clientSocketPath(session),
   };
-  const out: Record<string, string> = {};
-  for (const prefix of runtimePrefixes()) {
-    for (const [name, value] of Object.entries(values)) {
-      out[`${prefix}_${name}`] = value;
-    }
-  }
-  return out;
 }
 
 /**
@@ -69,13 +62,8 @@ export function runtimeEnv(session = OSADE_SESSION): Record<string, string> {
  * checkout.
  */
 export function runtimeVariable(name: string): string {
-  return `${runtimePrefixes()[0]}_${name}`;
-}
-
-function runtimePrefixes(): string[] {
   const segments = new URL(runtimePin().license.upstream_repository).pathname.split('/').filter(Boolean);
-  const fromPin = (segments[segments.length - 1] ?? '').toUpperCase();
-  return [...new Set([fromPin, 'HERDR'])];
+  return `${(segments[segments.length - 1] ?? '').toUpperCase()}_${name}`;
 }
 
 interface RuntimePin {
@@ -201,9 +189,7 @@ export async function adoptOrSpawnSubstrate(options: SubstrateSupervisorOptions 
   }
 
   const env: NodeJS.ProcessEnv = { ...process.env, ...runtimeEnv(session) };
-  for (const prefix of runtimePrefixes()) {
-    Reflect.deleteProperty(env, `${prefix}_STARTUP_CWD`);
-  }
+  Reflect.deleteProperty(env, runtimeVariable('STARTUP_CWD'));
 
   const child = spawn(options.binary ?? substrateBinary(), ['server'], {
     env,

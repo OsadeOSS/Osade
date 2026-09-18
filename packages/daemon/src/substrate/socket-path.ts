@@ -65,32 +65,16 @@ export function runtimeEnv(
   session: string = OSADE_SESSION,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-  const values = {
-    SESSION: session,
-    SOCKET_PATH: apiSocketPath(session, env),
-    CLIENT_SOCKET_PATH: clientSocketPath(session, env),
+  return {
+    [runtimeVariable('SESSION')]: session,
+    [runtimeVariable('SOCKET_PATH')]: apiSocketPath(session, env),
+    [runtimeVariable('CLIENT_SOCKET_PATH')]: clientSocketPath(session, env),
   };
-  const out: Record<string, string> = {};
-  for (const prefix of runtimePrefixes()) {
-    for (const [name, value] of Object.entries(values)) {
-      out[`${prefix}_${name}`] = value;
-    }
-  }
-  return out;
 }
 
 /** One of the runtime's own environment variables, e.g. `runtimeVariable('STARTUP_CWD')`. */
 export function runtimeVariable(name: string): string {
   return `${SUBSTRATE_PIN.envPrefix}_${name}`;
-}
-
-/** Every prefixed spelling the spawned binary might read. */
-export function runtimeVariableNames(name: string): string[] {
-  return runtimePrefixes().map((prefix) => `${prefix}_${name}`);
-}
-
-function runtimePrefixes(): string[] {
-  return [...new Set([SUBSTRATE_PIN.envPrefix, 'HERDR'])];
 }
 
 /** Translates a socket path into what `net.connect` needs on this platform. */

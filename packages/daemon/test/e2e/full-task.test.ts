@@ -11,7 +11,7 @@ import { LaunchTask } from '../../src/domain/launch-task.js';
 import { SubstrateClient } from '../../src/substrate/client.js';
 import { assertNoDrift } from '../../src/substrate/drift-check.js';
 import { SubstrateEventSubscriber } from '../../src/substrate/event-subscriber.js';
-import { apiSocketPath, runtimeDir, runtimeEnv, runtimeVariableNames } from '../../src/substrate/socket-path.js';
+import { apiSocketPath, runtimeDir, runtimeEnv, runtimeVariable } from '../../src/substrate/socket-path.js';
 import { runtimeBinary } from '../../src/substrate/runtime-binary.js';
 
 /**
@@ -71,7 +71,7 @@ beforeAll(async () => {
   // §18.1 — an isolated named session, spawned detached with the runtime's STARTUP_CWD variable cleared so
   // the substrate does not create a stray workspace we did not ask for.
   const env: NodeJS.ProcessEnv = { ...process.env, ...runtimeEnv(SESSION) };
-  for (const key of runtimeVariableNames('STARTUP_CWD')) Reflect.deleteProperty(env, key);
+  Reflect.deleteProperty(env, runtimeVariable('STARTUP_CWD'));
   server = spawn(SUBSTRATE_BIN, ['server'], { env, stdio: 'ignore', detached: false });
 
   substrate = new SubstrateClient({ session: SESSION });

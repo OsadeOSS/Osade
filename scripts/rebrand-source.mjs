@@ -14,8 +14,8 @@ import { basename, dirname, join, relative } from 'node:path';
  *
  *   node scripts/rebrand-source.mjs [dir]      (default: backend; absolute paths accepted)
  *
- * Every name it works with is read from its record rather than written here: Osade's repository
- * from package.json. The name it replaces is the upstream project this tree was fetched from.
+ * Every name it works with is read from its record rather than written here: the upstream
+ * repository and website from the runtime's pin.json, Osade's repository from package.json.
 
  *
  * What changes — the tree becomes a self-consistent Osade fork:
@@ -58,9 +58,15 @@ const MAX_BYTES = 20 * 1024 * 1024;
 
 // ---- names, from their records ---------------------------------------------------------------
 
-const OWNER = 'herdrdev';
-const NAME = 'herdr';
-const WEBSITE_HOST = 'herdr.dev';
+function runtimePin() {
+  const dir = join(ROOT, 'vendor', 'runtime');
+  const keys = readdirSync(dir).filter((key) => existsSync(join(dir, key, 'pin.json'))).sort();
+  return JSON.parse(readFileSync(join(dir, keys[keys.length - 1], 'pin.json'), 'utf8'));
+}
+
+const pin = runtimePin();
+const [OWNER, NAME] = new URL(pin.license.upstream_repository).pathname.split('/').filter(Boolean);
+const WEBSITE_HOST = new URL(pin.license.upstream_website).host.toLowerCase();
 
 const osadeRepository = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).repository;
 const OSADE_SLUG = new URL(String(osadeRepository.url ?? osadeRepository).replace(/\.git$/, ''))
