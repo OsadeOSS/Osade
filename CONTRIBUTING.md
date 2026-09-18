@@ -7,39 +7,33 @@ as open-source contributors.
 
 ## Before you start
 
-M0–M3 are built. What is left is on [`docs/todo.md`](docs/todo.md) — live GitHub/model
-acceptance, plus a short list of product follow-ups. Spec work still matters, but
-scaffolding the product does not.
-
 Read, in this order:
 
-1. [`README.md`](README.md) — what Osade is and why.
-2. [`docs/architechture/OSADE.md`](docs/architechture/OSADE.md) — the product requirements and
-   build spec. Long, and worth it. **Sections marked INVARIANT are load-bearing** and sections
-   marked **DECISION** were settled deliberately. Implement them; do not relitigate them in a
-   PR. If you think one is wrong, open an issue that says which one and what evidence changed.
+1. [`README.md`](README.md) — what Osade is, why, and how to run it from a checkout.
+2. [`docs/OSADE.md`](docs/OSADE.md) — the product requirements and build spec. Long, and worth
+   it. **Sections marked INVARIANT are load-bearing** and sections marked **DECISION** were
+   settled deliberately. Implement them; do not relitigate them in a PR. If you think one is
+   wrong, open an issue that says which one and what evidence changed.
 3. [`SECURITY.md`](SECURITY.md) — what counts as a vulnerability here, and how to report one.
 
 The substrate surface Osade codes against is the pinned schema under
-`vendor/runtime/<version>-p<protocol>/api-schema.json` and the generated client in
-`packages/daemon/src/substrate/generated/`. There is no separate `SUBSTRATE-CONTRACT.md` or
-`PRD-DELTA.md` in this tree; corrections from that recon live in OSADE.md itself (look for
-*"Corrected … per PRD-DELTA"* markers).
+`vendor/runtime/0.8.2-p20/api-schema.json` and the generated client in
+`packages/daemon/src/substrate/generated/`.
 
-There is one branch, `main`. Work from it.
+The default branch is `main`. Open pull requests against it.
 
 ---
 
 ## Rules this project enforces
 
 These will send a PR back regardless of how good the code is. Most are lint-enforced
-(`docs/architechture/OSADE.md` §20.1) rather than review comments.
+([docs/OSADE.md](docs/OSADE.md) §20.1) rather than review comments.
 
 - **Never hand-edit anything under `backend/`.** It is the substrate source, kept as reference.
   Its one change is the rename applied by `scripts/rebrand-source.mjs`; re-run that script rather
   than editing a file.
-- **`backend/` is never a codegen input.** substrate client is generated only from the pinned
-  schema in `vendor/runtime/<version>-p<protocol>/api-schema.json` (§4.1). The substrate's version
+- **`backend/` is never a codegen input.** The substrate client is generated only from the
+  pinned schema in `vendor/runtime/0.8.2-p20/api-schema.json` (§4.1). The substrate's version
   string is not a contract: two different builds both call themselves `0.8.2`.
 - **No `status` column, in any table, ever.** Status is a pure function over durable facts,
   recomputed at read time (§6). This is the single most important rule in the project.
@@ -51,24 +45,25 @@ These will send a PR back regardless of how good the code is. Most are lint-enfo
 - **No agent-authored public write without a gate** (§14), and **no auto-merge, ever**.
 - No `any`. No `console.*` or `process.exit` in `packages/daemon/src/**` outside `cli.ts`.
 
-the substrate's own `AGENTS.md` governs `backend/` only. It does not govern Osade code.
+The substrate's own `AGENTS.md` governs `backend/` only. It does not govern Osade code.
 
 ---
 
 ## Development workflow
 
 ```bash
-git clone <your-fork>
-cd osade
+git clone https://github.com/OsadeOSS/Osade.git
+cd Osade
 git checkout -b feature/<short-description>
 ```
 
 Laptop setup — clone, fetch the pinned runtime, run the Electron app — is in the README.
 
-You do **not** need to build the substrate. Osade ships a prebuilt binary, deliberately: the substrate requires
-Zig 0.15.2 to build its vendored `libghostty-vt`, which is not an acceptable contributor
-prerequisite. If you want to run against a local the substrate, put it on `PATH` and expect the boot
-drift check (§4.1.1) to complain when its protocol differs from the pinned one.
+You do **not** need to build the substrate. Osade ships a prebuilt binary, deliberately: the
+substrate requires Zig 0.15.2 to build its vendored `libghostty-vt`, which is not an acceptable
+contributor prerequisite. If you want to run against a local substrate, put it on `PATH` (or
+set `OSADE_SUBSTRATE_BIN`) and expect the boot drift check (§4.1.1) to complain when its
+protocol differs from the pinned one.
 
 Commit with conventional-commit-style messages:
 
@@ -101,12 +96,15 @@ evidence justified it. A spec that drifts from the code is worse than no spec.
 ```text
 packages/daemon/test/unit/         pure reducers, derive-status, verify-plan. No I/O.
 packages/daemon/test/integration/  real sqlite, fake substrate, recorded GitHub fixtures
-apps/desktop/test/                 vitest + playwright on the renderer
 packages/daemon/test/e2e/          real substrate binary, real git repo fixture, one full task
+apps/desktop/test/                 vitest on the renderer and main-process helpers
+packages/cli/test/                 osade . and the task verbs
 ```
 
-Pre-commit runs unit + integration. E2E runs in CI. If CI hangs after tests appear to finish,
-suspect a live subprocess or a daemon a unit-style suite booted — not a slow test.
+`pnpm check` is the gate: schema codegen, Rust crate attribution, lint, typecheck, and the
+unit/integration vitest run. E2E is `pnpm test:e2e` and needs the fetched runtime. If CI hangs
+after tests appear to finish, suspect a live subprocess or a daemon a unit-style suite booted —
+not a slow test.
 
 ---
 
@@ -126,10 +124,10 @@ review, and this repository should hold itself to that standard.
 ## Reporting bugs
 
 Include what you expected, what happened, steps to reproduce, relevant logs, and your OS. For
-anything involving the substrate, add the output of `the substrate status` and `the substrate --version`.
+anything involving the substrate, add `osade-runtime --version` (or `pnpm substrate:drift` from
+a checkout).
 
-Osade's logs live in `~/.osade/logs/<date>.log`. the substrate's are in its session data directory —
-`the substrate status` prints the path.
+Osade's logs live in `~/.osade/logs/` (`%USERPROFILE%\.osade\logs` on Windows).
 
 **Security issues do not go in public issues.** See [`SECURITY.md`](SECURITY.md).
 
@@ -145,13 +143,6 @@ experience levels, and good contributions include both code and useful feedback.
 ## Licensing
 
 Osade is Apache-2.0 (`LICENSE`). By contributing you agree your contributions are licensed
-under it. If you add a dependency, update `THIRD-PARTY-NOTICES.md` in the same PR — and note
-that `gate.dep_add` exists in the product for a reason: supply chain is a first-class concern
-here, not an afterthought.
-
----
-
-## If you are unsure
-
-Open an issue or a discussion before spending significant time, especially for anything that
-touches an INVARIANT. Those are cheap to discuss and expensive to unpick.
+under it. If you add a dependency Osade redistributes, update
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) in the same PR. `pnpm attribution` covers
+the substrate crate graph; do not edit `RUST-CRATES.md` by hand.

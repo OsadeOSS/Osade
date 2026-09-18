@@ -29,10 +29,12 @@ const PIN_DIR = join(ROOT, 'vendor', 'runtime', '0.8.2-p20');
 const pin = JSON.parse(readFileSync(join(PIN_DIR, 'pin.json'), 'utf8'));
 
 /**
- * Release file names are recorded with `{project}` — the last segment of the upstream repository
- * the pin names — so the project is named once, in `license.upstream_repository`.
+ * Release file names and the GitHub release they are downloaded from.
+ *
+ * pin.json records Osade's identity. The checksummed assets are still published under the
+ * upstream project's release names, so those names live here rather than in the pin.
  */
-const PROJECT = new URL(pin.license.upstream_repository).pathname.split('/').filter(Boolean).pop();
+const PROJECT = 'herdr';
 const named = (text) => text.replaceAll('{project}', PROJECT);
 pin.binary.assets = Object.fromEntries(
   Object.entries(pin.binary.assets).map(([name, asset]) => [
@@ -43,9 +45,7 @@ pin.binary.assets = Object.fromEntries(
   ]),
 );
 
-// pin.json is the provenance record, so the release URL and the asset names come from there
-// rather than being repeated here.
-const RELEASE = `${pin.license.upstream_repository}/releases/download/${pin.binary.release_tag}`;
+const RELEASE = `https://github.com/herdrdev/herdr/releases/download/${pin.binary.release_tag}`;
 
 /** Rust target triples by Node platform and arch — the `target` of each asset in pin.json. */
 const TARGETS = {

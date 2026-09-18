@@ -802,7 +802,7 @@ export interface InstalledPluginInfo {
   events?: PluginManifestEventHook[];
   link_handlers?: PluginManifestLinkHandler[];
   manifest_path: string;
-  min_herdr_version?: string;
+  min_osade_version?: string;
   name: string;
   panes?: PluginManifestPane[];
   platforms?: PluginPlatform[] | null;

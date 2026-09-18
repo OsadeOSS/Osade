@@ -20,13 +20,13 @@
   },
   "schema": {
     "path": "api-schema.json",
-    "sha256": "033bd61133e91c3f7f1ed27a78f0189b93cf13092e26fb315ed9cb6ccd6c637f",
+    "sha256": "050dd7f06aecdc6da085fea946ed1aaa7290c6f9f746716288af94e485c315e9",
     "captured_with": "osade-runtime api schema --json",
     "captured_at": "2026-09-04",
     "method_list": "methods.txt"
   },
   "binary": {
-    "$comment": "Release assets for v0.8.2, hashed from what GitHub actually serves. NOT committed - ~91 MB of binaries do not belong in git. `node scripts/fetch-substrate-binaries.mjs` downloads and verifies against these. CONFIRMED 2026-09-11: the Windows binary inside the zip hashes to the value the schema was captured from, so the pinned schema comes from the genuine release build - while backend/ source is AHEAD of v0.8.2 (ADR 0002). Binary and source are pinned to different things, deliberately and now provably. Asset names are written with {project}, the last segment of license.upstream_repository, and the release is that repository\u2019s release_tag.",
+    "$comment": "Release assets for v0.8.2, hashed from what GitHub actually serves. NOT committed - ~91 MB of binaries do not belong in git. `node scripts/fetch-substrate-binaries.mjs` downloads and verifies against these. CONFIRMED 2026-09-11: the Windows binary inside the zip hashes to the value the schema was captured from, so the pinned schema comes from the genuine release build - while backend/ source is AHEAD of v0.8.2 (ADR 0002). Binary and source are pinned to different things, deliberately and now provably. `{project}` in asset names is filled by the fetch script; after verify the file is renamed to osade-runtime.",
     "vendored": false,
     "release_tag": "v0.8.2",
     "expected_layout": "vendor/runtime/<version>-p<protocol>/<target>/osade-runtime[.exe]",
@@ -69,8 +69,8 @@
     "source": "LICENSE at tag v0.8.2 of license.upstream_repository",
     "fetched_at": "2026-09-11",
     "notice_file": null,
-    "upstream_repository": "https://github.com/herdrdev/herdr",
-    "upstream_website": "https://herdr.dev"
+    "upstream_repository": "https://github.com/OsadeOSS/Osade",
+    "upstream_website": "https://github.com/OsadeOSS/Osade"
   },
   "known_gaps": {
     "$comment": "Methods present in backend/src/api/schema.rs but absent from this pinned schema. Calling any of these against this target returns invalid_request. See PRD-DELTA #1.",

@@ -662,7 +662,7 @@ export type NotificationShowSound = 'none' | 'done' | 'request';
 export type PaneAgentState = 'idle' | 'working' | 'blocked' | 'unknown';
 export type PaneDirection = 'left' | 'right' | 'up' | 'down';
 export type PaneGraphicsFormat = 'png' | 'rgb' | 'rgba' | 'bgra';
-export type PaneRightClickTarget = 'herdr' | 'pane';
+export type PaneRightClickTarget = 'osade' | 'pane';
 export type PaneMoveDestination =
   | {
       ratio?: number | null;
@@ -926,7 +926,7 @@ export interface PaneSplitParams {
   };
   focus?: boolean;
   ratio?: number | null;
-  right_click?: 'herdr' | 'pane';
+  right_click?: 'osade' | 'pane';
   target_pane_id?: string | null;
   workspace_id?: string | null;
 }

@@ -2306,7 +2306,7 @@
             "position": {
               "anyOf": [
                 {
-                  "$ref": "#/schemas/request/$defs/ToastHerdrPosition"
+                  "$ref": "#/schemas/request/$defs/ToastOsadePosition"
                 },
                 {
                   "type": "null"
@@ -3006,7 +3006,7 @@
         },
         "PaneRightClickTarget": {
           "enum": [
-            "herdr",
+            "osade",
             "pane"
           ],
           "type": "string"
@@ -3094,7 +3094,7 @@
             },
             "right_click": {
               "$ref": "#/schemas/request/$defs/PaneRightClickTarget",
-              "default": "herdr"
+              "default": "osade"
             },
             "target_pane_id": {
               "type": [
@@ -4136,7 +4136,7 @@
           ],
           "type": "object"
         },
-        "ToastHerdrPosition": {
+        "ToastOsadePosition": {
           "enum": [
             "top-left",
             "top-right",
@@ -7084,7 +7084,7 @@
             "manifest_path": {
               "type": "string"
             },
-            "min_herdr_version": {
+            "min_osade_version": {
               "default": "",
               "type": "string"
             },
@@ -10109,5 +10109,5 @@
       "type": "object"
     }
   },
-  "title": "Herdr API"
+  "title": "Osade API"
 }

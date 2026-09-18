@@ -6,7 +6,7 @@ import { basename, dirname, join, relative } from 'node:path';
  * Rename the substrate source in `backend/` into Osade's name.
  *
  * `backend/` is an Apache-2.0 upstream tree. The licence permits modifying and renaming it; what it
- * requires is that the licence and attribution travel with it (docs/THIRD-PARTY-NOTICES.md,
+ * requires is that the licence and attribution travel with it (THIRD-PARTY-NOTICES.md,
  * vendor/runtime/<pin>/LICENSE) and that changed files say they were changed. This script *is*
  * that statement of change: it is the only edit ever made to `backend/`, it is deterministic, and
  * `backend/OSADE-PIN.json` records that it ran. Running it twice changes nothing, and
@@ -14,8 +14,9 @@ import { basename, dirname, join, relative } from 'node:path';
  *
  *   node scripts/rebrand-source.mjs [dir]      (default: backend; absolute paths accepted)
  *
- * Every name it works with is read from its record rather than written here: the upstream
- * repository and website from the runtime's pin.json, Osade's repository from package.json.
+ * Every name it works with is read from its record rather than written here: Osade's repository
+ * from package.json. The name it replaces is the upstream project this tree was fetched from.
+
  *
  * What changes — the tree becomes a self-consistent Osade fork:
  *   - The upstream project name, in every case, in text and in file and directory names. A word
@@ -57,15 +58,9 @@ const MAX_BYTES = 20 * 1024 * 1024;
 
 // ---- names, from their records ---------------------------------------------------------------
 
-function runtimePin() {
-  const dir = join(ROOT, 'vendor', 'runtime');
-  const keys = readdirSync(dir).filter((key) => existsSync(join(dir, key, 'pin.json'))).sort();
-  return JSON.parse(readFileSync(join(dir, keys[keys.length - 1], 'pin.json'), 'utf8'));
-}
-
-const pin = runtimePin();
-const [OWNER, NAME] = new URL(pin.license.upstream_repository).pathname.split('/').filter(Boolean);
-const WEBSITE_HOST = new URL(pin.license.upstream_website).host.toLowerCase();
+const OWNER = 'herdrdev';
+const NAME = 'herdr';
+const WEBSITE_HOST = 'herdr.dev';
 
 const osadeRepository = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).repository;
 const OSADE_SLUG = new URL(String(osadeRepository.url ?? osadeRepository).replace(/\.git$/, ''))

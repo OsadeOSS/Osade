@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 /**
  * This file writes attribution for the crates inside the vendored runtime binary; their names are
- * the crates' own. The runtime itself is attributed by name in docs/THIRD-PARTY-NOTICES.md.
+ * the crates' own. The runtime itself is attributed by name in THIRD-PARTY-NOTICES.md.
  *
  * Rust crate attribution for the substrate binary Osade ships.
  *
@@ -117,7 +117,7 @@ function render(groups, unresolved, total) {
     '- **libghostty-vt** and **portable-pty** are vendored into `backend/vendor/` rather than',
     '  resolved from crates.io, and carry their own patches. See the `.patches.md` files beside',
     '  them.',
-    '- The runtime binary itself is Apache-2.0; see `LICENSE` in this directory and docs/THIRD-PARTY-NOTICES.md.',
+    '- The runtime binary itself is Apache-2.0; see `LICENSE` in this directory and THIRD-PARTY-NOTICES.md.',
     '',
   );
 

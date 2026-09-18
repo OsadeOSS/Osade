@@ -15,5 +15,5 @@ export const SUBSTRATE_PIN = Object.freeze({
   schemaVersion: 1,
   methodCount: 91,
   /** The prefix of the runtime's own environment variables, e.g. `<prefix>_SOCKET_PATH`. */
-  envPrefix: "HERDR",
+  envPrefix: "OSADE",
 });

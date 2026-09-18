@@ -114,7 +114,7 @@ in the send path waits for a lane to be ready.
 ### 1. Readiness gate before first send
 
 A lane is not sendable until it reports an idle composer. Add a `ready` fact
-to agent_fact, set from the detection manifest, distinct from herdr_state.
+to agent_fact, set from the detection manifest, distinct from substrate_state.
 
 - The first turn on a new lane enters as delivery `queued`, not `sending`.
 - Flush on ready, not on a timer.
@@ -129,8 +129,8 @@ to agent_fact, set from the detection manifest, distinct from herdr_state.
 isolate: true means a fresh worktree every time, so codex hits its trust
 prompt on every new lane. Add manifest rules to auto-confirm it, then clear
 the match buffer so stale trust text cannot re-match later. Same for any
-mode selector found in step 3. Add these to herdr's
-distribution/agent-detection/*.toml and open an upstream PR — do not
+mode selector found in step 3. Add these to the substrate's
+distribution/agent-detection/*.toml — do not
 scrape output from the daemon.
 
 ### 3. Settling replies without hook metadata

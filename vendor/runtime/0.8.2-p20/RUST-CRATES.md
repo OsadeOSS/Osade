@@ -138,4 +138,4 @@ listed here.
 - **libghostty-vt** and **portable-pty** are vendored into `backend/vendor/` rather than
   resolved from crates.io, and carry their own patches. See the `.patches.md` files beside
   them.
-- The runtime binary itself is Apache-2.0; see `LICENSE` in this directory and docs/THIRD-PARTY-NOTICES.md.
+- The runtime binary itself is Apache-2.0; see `LICENSE` in this directory and THIRD-PARTY-NOTICES.md.

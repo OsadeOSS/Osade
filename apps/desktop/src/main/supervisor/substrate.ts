@@ -47,24 +47,35 @@ function clientSocketPath(session: string): string {
  * runtime's pin.json; everything they point at is Osade's. Kept in step with the daemon's copy.
  */
 export function runtimeEnv(session = OSADE_SESSION): Record<string, string> {
-  return {
-    [runtimeVariable('SESSION')]: session,
-    [runtimeVariable('SOCKET_PATH')]: substrateSocketPath(session),
-    [runtimeVariable('CLIENT_SOCKET_PATH')]: clientSocketPath(session),
+  const values = {
+    SESSION: session,
+    SOCKET_PATH: substrateSocketPath(session),
+    CLIENT_SOCKET_PATH: clientSocketPath(session),
   };
+  const out: Record<string, string> = {};
+  for (const prefix of runtimePrefixes()) {
+    for (const [name, value] of Object.entries(values)) {
+      out[`${prefix}_${name}`] = value;
+    }
+  }
+  return out;
 }
 
 /**
- * One of the runtime's own environment variables, prefixed with the upstream project name its pin
- * records (the last segment of `license.upstream_repository`), upper-cased.
+ * One of the runtime's own environment variables, prefixed from pin.json.
  *
  * The daemon gets the prefix through codegen; this process cannot import that, so it reads the
  * record itself — shipped beside the runtime in a packaged app, in `vendor/runtime/<pin>/` in a
  * checkout.
  */
 export function runtimeVariable(name: string): string {
+  return `${runtimePrefixes()[0]}_${name}`;
+}
+
+function runtimePrefixes(): string[] {
   const segments = new URL(runtimePin().license.upstream_repository).pathname.split('/').filter(Boolean);
-  return `${(segments[segments.length - 1] ?? '').toUpperCase()}_${name}`;
+  const fromPin = (segments[segments.length - 1] ?? '').toUpperCase();
+  return [...new Set([fromPin, 'HERDR'])];
 }
 
 interface RuntimePin {
@@ -190,7 +201,9 @@ export async function adoptOrSpawnSubstrate(options: SubstrateSupervisorOptions 
   }
 
   const env: NodeJS.ProcessEnv = { ...process.env, ...runtimeEnv(session) };
-  Reflect.deleteProperty(env, runtimeVariable('STARTUP_CWD'));
+  for (const prefix of runtimePrefixes()) {
+    Reflect.deleteProperty(env, `${prefix}_STARTUP_CWD`);
+  }
 
   const child = spawn(options.binary ?? substrateBinary(), ['server'], {
     env,

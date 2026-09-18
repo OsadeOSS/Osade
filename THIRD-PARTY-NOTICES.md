@@ -9,24 +9,25 @@ Osade distributes or depends on.
 
 ### Terminal runtime
 
-Osade ships a prebuilt runtime binary, built by the upstream project below, in
-`vendor/runtime/<version>-p<protocol>/`, and uses it as its execution substrate. Osade does not
-modify the binary; it drives it through the runtime's documented JSON API and extension points.
+Osade ships a prebuilt runtime binary as `osade-runtime` at tag **v0.8.2** (protocol 20). It
+lives under `vendor/runtime/0.8.2-p20/` after `node scripts/fetch-substrate-binaries.mjs`.
+Osade does not modify the binary; it drives it through the runtime's documented JSON API.
 
-A copy of the runtime's source is kept at `backend/` as reference material. It is not built and not
-part of the Osade build. As Apache-2.0 section 4(b) requires be stated, it is modified in one way:
-`scripts/rebrand-source.mjs` renames the project's name to Osade's throughout. Links to where
-the project lives, and its release, install and update addresses, point at Osade's repository;
-the vendored patches' rationale links and author addresses are kept, and the release manifests
-are trimmed to the pinned release. Osade's own runtime is unaffected: it is the
-upstream release binary, fetched and checksummed from `vendor/runtime/<version>-p<protocol>/pin.json`. `backend/OSADE-PIN.json` records the
-upstream commit it was applied to.
+| | |
+| --- | --- |
+| License | Apache-2.0 |
+| LICENSE | `vendor/runtime/0.8.2-p20/LICENSE` (byte-for-byte from the pinned tag) |
+| NOTICE | none — upstream has no `NOTICE` file at this tag |
+| Pin | `vendor/runtime/0.8.2-p20/pin.json` |
 
-Apache-2.0 requires that the runtime's own `NOTICE` file, if it carries one, be reproduced in
-distributions that include the binary. **Action required before the first release:** fetch
-`LICENSE` and `NOTICE` from the pinned tag into
-`vendor/runtime/<version>-p<protocol>/` and reference them here. Neither file was present in
-the `backend/` copy.
+A copy of the runtime's source is kept at `backend/` as reference material. It is not built
+and is not part of the Osade build. As Apache-2.0 section 4(b) requires be stated, it is
+modified in one way: `scripts/rebrand-source.mjs` renames the project's name to Osade's
+throughout. Links to where the project lives, and its release, install and update addresses,
+point at Osade's repository; the vendored patches' rationale links and author addresses are
+kept, and the release manifests are trimmed to the pinned release. `backend/OSADE-PIN.json`
+records the upstream commit that rename was applied to. Osade's own runtime is unaffected: it
+is the upstream release binary, fetched and checksummed from `pin.json`.
 
 ### Vendored inside the runtime binary
 
@@ -35,35 +36,52 @@ binary.
 
 | Component | License | Copyright / source |
 | --- | --- | --- |
-| **libghostty-vt** (Ghostty terminal core) | MIT | Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors — `backend/vendor/libghostty-vt/LICENSE`, pinned at 1.3.2-HEAD-+c5a21edfc |
-| **portable-pty** (vendored fork) | MIT | wezterm project — `backend/vendor/portable-pty/Cargo.toml` |
-| The runtime's Rust dependency graph | mixed permissive (MIT / Apache-2.0 / BSD) | resolved in `backend/Cargo.lock` |
+| **libghostty-vt** (Ghostty terminal core) | MIT | Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors — `backend/vendor/libghostty-vt/LICENSE` |
+| **portable-pty** (vendored fork) | MIT | Wez Furlong / wezterm — `backend/vendor/portable-pty/Cargo.toml` |
+| **ConPTY** (Windows zip only) | Microsoft | `vendor/runtime/0.8.2-p20/third-party/` |
+| The runtime's Rust crate graph | mixed permissive (MIT / Apache-2.0 / BSD / others) | `vendor/runtime/0.8.2-p20/RUST-CRATES.md`, generated from `backend/Cargo.lock` by `pnpm attribution` |
 
-**Action required before the first release:** generate the full Rust crate attribution with
-`cargo about` or `cargo deny` against the pinned tag's `Cargo.lock` and append it here.
-The crate graph is not enumerated in this file yet.
+Do not edit `RUST-CRATES.md` by hand. `pnpm attribution:check` fails when it drifts from the
+lockfile.
 
 ---
 
 ## Osade's own dependencies
 
-**None yet.** Osade has no `package.json` and no source tree as of 2026-09-04; product code
-starts at M0 (`docs/architechture/OSADE.md` §21).
+Resolved from `pnpm-lock.yaml`. Direct runtime dependencies, by package:
 
-When M0 lands, this section must list the runtime and bundled dependencies of
-`apps/desktop/`, `packages/daemon/`, `packages/contract/`, `packages/cli/` and
-`packages/skill-assets/` — Electron and its Chromium/Node components foremost, then
-`better-sqlite3`, `sqlite-vec`, `octokit`, `zod`, `trpc` and the rest of the resolved tree.
+**`apps/desktop/`** (the window; Electron 33 bundles Chromium and Node)
 
-Generate it from the lockfile rather than by hand, and wire the generator into CI so this
-file cannot drift the way the one it replaced did.
+- `electron` — [Electron](https://www.electronjs.org/) (MIT), including Chromium and Node
+- `react`, `react-dom` — MIT
+- `@xterm/xterm`, `@xterm/addon-fit` — MIT
+
+**`packages/daemon/`**
+
+- `better-sqlite3` — MIT
+- `node-pty` — MIT
+- `octokit` — MIT
+- `@trpc/server` — MIT
+- `ws` — MIT
+- `yaml` — ISC
+- `zod` — MIT
+
+**`packages/contract/`** — `zod` (MIT)
+
+**`packages/cli/`** — no third-party runtime dependencies beyond `@osade/contract`
+
+A packaged build also ships a Node 22 runtime (`scripts/fetch-node-runtime.mjs`) so the daemon
+does not run on Electron's ABI. Node is [MIT](https://github.com/nodejs/node/blob/main/LICENSE).
+
+Transitive packages are in `pnpm-lock.yaml`. Adding a dependency that Osade redistributes
+belongs in this file in the same PR.
 
 ---
 
 ## Assets
 
-`assets/osade.png`, `assets/logo.jpg` and `assets/readme-logo.png` are Osade's own, covered by `LICENSE`.
+`assets/banner.png`, `assets/logo.jpg` and `assets/osade.png` are Osade's own, covered by
+`LICENSE`.
 
-IBM Plex Sans and IBM Plex Mono (`docs/architechture/OSADE.md` §19.2) are licensed under the SIL Open Font
-License 1.1. Add the OFL text here when the fonts are actually bundled; if they are loaded
-from a font CDN instead, say so and drop this entry.
+The UI names IBM Plex Mono and falls back to the system monospace stack. Plex is **not
+bundled**; there is nothing to attribute under the SIL Open Font License until it is.

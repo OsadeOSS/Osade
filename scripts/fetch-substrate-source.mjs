@@ -4,7 +4,6 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   rmSync,
   renameSync,
   writeFileSync,
@@ -32,14 +31,13 @@ const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '
 const BACKEND = join(ROOT, 'backend');
 
 /**
- * `owner/name` of the upstream repository, from the runtime pin's provenance record — the one
- * place the project is named, so this script does not repeat it.
+ * `owner/name` of the repository `backend/` is fetched from.
+ *
+ * pin.json is Osade's identity; the source tree still comes from the upstream project this
+ * script names.
  */
 function upstreamRepository() {
-  const pinDir = join(ROOT, 'vendor', 'runtime');
-  const [key] = readdirSync(pinDir).sort().reverse();
-  const pin = JSON.parse(readFileSync(join(pinDir, key, 'pin.json'), 'utf8'));
-  return new URL(pin.license.upstream_repository).pathname.replace(/^\/|\/$/g, '');
+  return 'herdrdev/herdr';
 }
 
 /** Where the upstream repository is recorded, rather than repeating it in backend/OSADE-PIN.json. */

@@ -15,7 +15,7 @@ import { VerifyRunner } from '../../src/domain/verify-run.js';
 import { SubstrateClient } from '../../src/substrate/client.js';
 import { assertNoDrift } from '../../src/substrate/drift-check.js';
 import { SubstrateEventSubscriber } from '../../src/substrate/event-subscriber.js';
-import { runtimeDir, runtimeEnv, runtimeVariable } from '../../src/substrate/socket-path.js';
+import { runtimeDir, runtimeEnv, runtimeVariableNames } from '../../src/substrate/socket-path.js';
 import { runtimeBinary } from '../../src/substrate/runtime-binary.js';
 
 /**
@@ -105,7 +105,7 @@ beforeAll(async () => {
   await assertNoDrift(SUBSTRATE_BIN);
 
   const env: NodeJS.ProcessEnv = { ...process.env, ...runtimeEnv(SESSION) };
-  Reflect.deleteProperty(env, runtimeVariable('STARTUP_CWD'));
+  for (const key of runtimeVariableNames('STARTUP_CWD')) Reflect.deleteProperty(env, key);
   server = spawn(SUBSTRATE_BIN, ['server'], { env, stdio: 'ignore' });
 
   substrate = new SubstrateClient({ session: SESSION });
