@@ -15,6 +15,11 @@ import { lanePhase, startingLine, type PendingLane } from './delivery.js';
 import { Files } from './Files.js';
 import { GateCard } from './GateCard.js';
 import { LaneTerminal } from './LaneTerminal.js';
+import {
+  nextOpenedTerminal,
+  retainLaneTerminal,
+  terminalSurfaceVisible,
+} from './lane-terminal.js';
 import { chatLabel, type ChatGroup } from './lanes.js';
 import type { CatalogAgent } from './RepoSettings.js';
 import { GLYPH, STATUS, TONE_COLOUR, ago, statusCopyFor } from './status.js';
@@ -62,11 +67,16 @@ export function Detail({
 }): JSX.Element {
   const [filter, setFilter] = useState<string | null>(null);
   const [chatSurface, setChatSurface] = useState<'chat' | 'terminal'>('chat');
+  const [openedTerminal, setOpenedTerminal] = useState<string | null>(null);
   const [laneAttach, setLaneAttach] = useState<ComposerAttach | null>(null);
   const [attachDismissed, setAttachDismissed] = useState(false);
   const [modHeld, setModHeld] = useState(false);
   const [branchOfferDismissed, setBranchOfferDismissed] = useState(false);
   const focused = chat.lanes.find((t) => t.task.id === focusId) ?? chat.lanes[0]!;
+  const rememberedTerminal = nextOpenedTerminal(openedTerminal, focused.task.id, chatSurface);
+  if (rememberedTerminal !== openedTerminal) setOpenedTerminal(rememberedTerminal);
+  const terminalVisible = terminalSurfaceVisible(lane, chatSurface);
+  const keepTerminal = retainLaneTerminal(rememberedTerminal, focused.task.id);
   const copy = statusCopyFor(chat.status, focused.agent?.external_block);
   const colour = TONE_COLOUR[copy.tone];
   const openGates = chat.lanes.flatMap((t) =>
@@ -309,34 +319,30 @@ export function Detail({
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
-          overflow: lane === 'files' || lane === 'diff' || (lane === 'transcript' && chatSurface === 'terminal') ? 'hidden' : 'auto',
-          padding: lane === 'files' || lane === 'diff' || (lane === 'transcript' && chatSurface === 'terminal') ? 0 : '14px 16px',
+          overflow: lane === 'files' || lane === 'diff' || terminalVisible ? 'hidden' : 'auto',
+          padding: lane === 'files' || lane === 'diff' || terminalVisible ? 0 : '14px 16px',
         }}
       >
         {lane === 'transcript' && (
+          <div
+            style={{
+              display: 'flex',
+              gap: 6,
+              flexShrink: 0,
+              padding: terminalVisible ? '8px 12px 0' : 0,
+              marginBottom: 12,
+            }}
+          >
+            <FilterChip label="Chat" active={chatSurface === 'chat'} onClick={() => setChatSurface('chat')} />
+            <FilterChip
+              label="Terminal"
+              active={chatSurface === 'terminal'}
+              onClick={() => setChatSurface('terminal')}
+            />
+          </div>
+        )}
+        {lane === 'transcript' && chatSurface === 'chat' && (
           <>
-            <div
-              style={{
-                display: 'flex',
-                gap: 6,
-                flexShrink: 0,
-                padding: chatSurface === 'terminal' ? '8px 12px 0' : 0,
-                marginBottom: 12,
-              }}
-            >
-              <FilterChip label="Chat" active={chatSurface === 'chat'} onClick={() => setChatSurface('chat')} />
-              <FilterChip
-                label="Terminal"
-                active={chatSurface === 'terminal'}
-                onClick={() => setChatSurface('terminal')}
-              />
-            </div>
-            {chatSurface === 'terminal' ? (
-              <div style={{ flex: 1, minHeight: 0 }}>
-                <LaneTerminal key={focused.task.id} taskId={focused.task.id} />
-              </div>
-            ) : (
-              <>
             {chat.lanes.length > 1 && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
                 <FilterChip label="All" active={filter == null} onClick={() => setFilter(null)} />
@@ -374,9 +380,19 @@ export function Detail({
               followTaskId={focused.task.id}
               isolatedNotice={isolatedNotice}
             />
-              </>
-            )}
           </>
+        )}
+        {keepTerminal && (
+          <div
+            style={{
+              display: terminalVisible ? 'flex' : 'none',
+              flex: 1,
+              minHeight: 0,
+              flexDirection: 'column',
+            }}
+          >
+            <LaneTerminal taskId={focused.task.id} visible={terminalVisible} />
+          </div>
         )}
         {lane === 'files' && (
           <Files key={focused.task.id} task={focused} onAttach={setLaneAttach} />
@@ -399,7 +415,7 @@ export function Detail({
         )}
       </div>
 
-      {!(lane === 'transcript' && chatSurface === 'terminal') && (
+      {!terminalVisible && (
       <Composer
         key={chat.chatId}
         autoFocus={lane === 'transcript'}
