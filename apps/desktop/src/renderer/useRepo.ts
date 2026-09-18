@@ -11,7 +11,8 @@ import { api } from './api.js';
  * anything it can be told.
  *
  * A second `osade .` in another repository re-scopes this window rather than opening a new one,
- * which is what `onRepoOpened` is listening for.
+ * which is what `onRepoOpened` is listening for. `requestId` bumps on every such open — including
+ * the same path twice — so the window can focus a fresh empty chat each time.
  */
 
 export interface OpenRepo {
@@ -24,23 +25,30 @@ export interface OpenRepo {
   defaultAgent: string | null;
 }
 
-export function useRepo(): { repo: OpenRepo | null; error: string | null } {
+export function useRepo(): { repo: OpenRepo | null; error: string | null; requestId: number } {
   const [path, setPath] = useState<string | null>(null);
+  const [askId, setAskId] = useState(0);
   const [repo, setRepo] = useState<OpenRepo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState(0);
 
-  // What the window was opened on, plus anything a later `osade .` points it at.
   useEffect(() => {
-    void window.osade?.openedRepo().then(setPath);
-    return window.osade?.onRepoOpened(setPath);
+    function take(next: string | null): void {
+      if (!next) return;
+      setPath(next);
+      setAskId((n) => n + 1);
+    }
+    void window.osade?.openedRepo().then(take);
+    return window.osade?.onRepoOpened(take);
   }, []);
 
   useEffect(() => {
-    if (!path) {
+    if (!path || askId === 0) {
       setRepo(null);
       return;
     }
 
+    const forAsk = askId;
     let cancelled = false;
     void api
       .repoOpen(path)
@@ -48,6 +56,7 @@ export function useRepo(): { repo: OpenRepo | null; error: string | null } {
         if (cancelled) return;
         setRepo(result);
         setError(null);
+        setRequestId(forAsk);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -56,7 +65,7 @@ export function useRepo(): { repo: OpenRepo | null; error: string | null } {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, askId]);
 
-  return { repo, error };
+  return { repo, error, requestId };
 }

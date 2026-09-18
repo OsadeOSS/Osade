@@ -145,9 +145,11 @@ if (!app.requestSingleInstanceLock()) {
         }
       }
       if (window && !window.isDestroyed()) {
+        window.show();
         if (window.isMinimized()) window.restore();
         window.focus();
       }
+      app.focus({ steal: true });
     } catch (err) {
       say(`re-scope failed: ${(err as Error).message}`);
     }

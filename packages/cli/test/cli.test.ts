@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -409,7 +409,14 @@ describe('osade . — opening a repository', () => {
   });
 
   it('refuses a directory that is not in a git repository', async () => {
-    await expect(trpc('repoOpen', { path: tmpdir() })).rejects.toThrow(/not inside a git/);
+    const dir = mkdtempSync(join(tmpdir(), 'osade-nongit-'));
+    // A dummy `.git` stops git walking up into a parent repo (this machine's %USERPROFILE% is one).
+    writeFileSync(join(dir, '.git'), 'not a repository\n');
+    try {
+      await expect(trpc('repoOpen', { path: dir })).rejects.toThrow(/not inside a git/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('is idempotent — opening twice is opening once', async () => {

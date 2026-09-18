@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type JSX } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type PointerEvent as ReactPointerEvent } from 'react';
 
 import type { TaskView } from '@osade/contract';
 
@@ -36,6 +36,10 @@ const COLLAPSE_KEY = 'osade.repo-collapsed';
 const VIEW_KEY = 'osade.ledger-view';
 const NAMES_KEY = 'osade.repo-names';
 const GITHUB_SKIP_KEY = 'osade.github-skipped';
+const SIDEBAR_KEY = 'osade.sidebar-width';
+const SIDEBAR_MIN = 240;
+const SIDEBAR_MAX = 640;
+const SIDEBAR_DEFAULT = 320;
 
 type Tab =
   | {
@@ -62,7 +66,7 @@ interface PendingDraft {
 
 export function App(): JSX.Element {
   const { tasks: allTasks, connection } = useLedger();
-  const { repo, error: repoError } = useRepo();
+  const { repo, error: repoError, requestId } = useRepo();
   const catalog = useAgentCatalog(connection === 'live');
   const github = useGithub();
   const [githubSkipped, setGithubSkipped] = useState(() => {
@@ -93,6 +97,9 @@ export function App(): JSX.Element {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [pendingLanes, setPendingLanes] = useState<PendingLane[]>([]);
   const [agentModal, setAgentModal] = useState<PendingDraft | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
+  const [sidebarDrag, setSidebarDrag] = useState(false);
+  const sidebarDragOrigin = useRef<{ x: number; width: number } | null>(null);
 
   const defaultAgent = agentOverride ?? repo?.defaultAgent ?? null;
   const scoped = repo ? allTasks.filter((t) => t.task.repo_id === repo.repoId) : allTasks;
@@ -126,12 +133,27 @@ export function App(): JSX.Element {
   }, [repo]);
 
   useEffect(() => {
+    if (!repo || requestId === 0) return;
+    const id = crypto.randomUUID();
+    setTabs((current) => [
+      ...current,
+      { kind: 'draft', id, repoId: repo.repoId, repoPath: repo.path, agentId: defaultAgent },
+    ]);
+    setActiveId(id);
+    setLane('transcript');
+  }, [repo, requestId]);
+
+  useEffect(() => {
     localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed]));
   }, [collapsed]);
 
   useEffect(() => {
     localStorage.setItem(VIEW_KEY, view);
   }, [view]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
 
   useEffect(() => {
     localStorage.setItem(NAMES_KEY, JSON.stringify(aliases));
@@ -562,7 +584,30 @@ export function App(): JSX.Element {
     });
   }
 
-  if (githubWelcome && !github.status.signedIn && !githubSkipped) {
+  function onSidebarPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sidebarDragOrigin.current = { x: event.clientX, width: sidebarWidth };
+    setSidebarDrag(true);
+  }
+
+  function onSidebarPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    const origin = sidebarDragOrigin.current;
+    if (origin == null) return;
+    setSidebarWidth(clampSidebar(origin.width + event.clientX - origin.x));
+  }
+
+  function onSidebarPointerUp(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (sidebarDragOrigin.current == null) return;
+    sidebarDragOrigin.current = null;
+    setSidebarDrag(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  if (githubWelcome && !github.status.signedIn && !githubSkipped && repo == null) {
     return (
       <div style={{ padding: '48px 28px', maxWidth: 520, height: '100%' }}>
         <p style={{ margin: 0, fontSize: 'var(--t-l)', fontWeight: 600, letterSpacing: '-0.02em' }}>
@@ -587,13 +632,13 @@ export function App(): JSX.Element {
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: !showDetail
-          ? 'minmax(0, 1fr)'
-          : view === 'board'
-            ? 'minmax(420px, 1.15fr) minmax(0, 1fr)'
-            : 'minmax(280px, 360px) minmax(0, 1fr)',
+        gridTemplateColumns: showDetail
+          ? `${sidebarWidth}px 6px minmax(0, 1fr)`
+          : 'minmax(0, 1fr)',
         height: '100%',
         background: 'var(--bg-0)',
+        cursor: sidebarDrag ? 'col-resize' : undefined,
+        userSelect: sidebarDrag ? 'none' : undefined,
       }}
     >
       <main
@@ -601,7 +646,6 @@ export function App(): JSX.Element {
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          borderRight: '0.5px solid var(--line)',
           background: 'var(--bg-1)',
         }}
       >
@@ -821,7 +865,29 @@ export function App(): JSX.Element {
       </main>
 
       {showDetail && (
-      <aside style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+        <>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            aria-valuenow={Math.round(sidebarWidth)}
+            aria-valuemin={SIDEBAR_MIN}
+            aria-valuemax={SIDEBAR_MAX}
+            onPointerDown={onSidebarPointerDown}
+            onPointerMove={onSidebarPointerMove}
+            onPointerUp={onSidebarPointerUp}
+            onPointerCancel={onSidebarPointerUp}
+            onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
+            style={{
+              cursor: 'col-resize',
+              touchAction: 'none',
+              background: sidebarDrag
+                ? 'var(--focus)'
+                : 'linear-gradient(to right, transparent 2px, var(--line) 2px, var(--line) 3px, transparent 3px)',
+            }}
+          />
+
+          <aside style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
         <TabStrip
           tabs={tabs}
           groups={groups}
@@ -914,7 +980,8 @@ export function App(): JSX.Element {
             <NothingSelected hasChats={groups.length > 0} />
           )}
         </div>
-      </aside>
+          </aside>
+        </>
       )}
 
       <CommandPalette
@@ -1582,6 +1649,21 @@ function folderFromWorktree(path: string): string | null {
   const last = parts[parts.length - 1] ?? '';
   if (last.startsWith('t_')) return parts[parts.length - 2] ?? null;
   return last;
+}
+
+function loadSidebarWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(SIDEBAR_KEY));
+    if (Number.isFinite(n)) return clampSidebar(n);
+  } catch {
+    // localStorage can throw in a private session.
+  }
+  return SIDEBAR_DEFAULT;
+}
+
+function clampSidebar(n: number): number {
+  const room = typeof window === 'undefined' ? SIDEBAR_MAX : window.innerWidth - 280;
+  return clamp(n, SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, room)));
 }
 
 function loadAliases(): Record<string, string> {

@@ -96,7 +96,7 @@ Usage:
   osade task archive [task-id]
 
 Task id defaults to $OSADE_TASK_ID, which is set inside every agent lane.
-The daemon must be running: osade-daemon start
+osade . opens the window and does not wait; task verbs need a running daemon.
 `;
 
 export async function main(argv: string[], io: Io = processIo): Promise<number> {

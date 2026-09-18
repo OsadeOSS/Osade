@@ -1,20 +1,35 @@
-import { spawn } from 'node:child_process';
+import { spawn, type SpawnOptions } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { api, OsadeCliError } from './client.js';
 import type { Io } from './cli.js';
 
 /**
  * `osade .` — open the window on the repository you are standing in.
  *
- * The shape people already know from `code .`, and the reason it exists here: Osade's whole job
- * happens inside a repository, so the path from "I am in a repo" to "Osade is watching it" should
- * be one word. Before this, it was: find the app, launch it, find the repo in a list that may not
- * contain it yet.
+ * The shape people already know from `code .`. The CLI does **not** talk to the daemon first:
+ * that would hold the console until a server answered, and it would fail when the window is
+ * closed even though agents (and the daemon) are still running. Launch the app, return, and let
+ * the window adopt-or-spawn the daemon the way §18.1 already specifies.
  *
- * The daemon resolves the path to the repository *root*, so this works from any subdirectory.
+ * The daemon still resolves the path to the repository *root*, so this works from any
+ * subdirectory. A second invocation re-scopes the window you already have — Electron's
+ * single-instance lock, not a second process.
  */
+
+export interface AppLaunch {
+  command: string;
+  args: string[];
+  cwd?: string;
+}
+
+export type SpawnApp = (launch: AppLaunch, repoPath: string) => void;
+
+export interface OpenHooks {
+  spawnApp?: SpawnApp;
+  findApp?: () => AppLaunch | null;
+}
 
 /**
  * Is this argument a path rather than a command?
@@ -37,7 +52,7 @@ export function looksLikePath(arg: string, commands: readonly string[]): boolean
   }
 }
 
-export async function openRepo(pathArg: string, io: Io): Promise<number> {
+export async function openRepo(pathArg: string, io: Io, hooks: OpenHooks = {}): Promise<number> {
   const target = resolve(pathArg.startsWith('~') ? expandHome(pathArg) : pathArg);
 
   if (!existsSync(target)) {
@@ -45,39 +60,37 @@ export async function openRepo(pathArg: string, io: Io): Promise<number> {
     return 2;
   }
 
-  // The daemon owns the git question, so the answer is the same whether you came from here, the
-  // window, or an agent driving the CLI (§17).
-  const repo = await api.repoOpen(target);
-
-  const where = repo.slug ?? repo.name;
-  const tasks =
-    repo.taskCount === 0
-      ? 'no tasks yet'
-      : `${repo.taskCount} ${repo.taskCount === 1 ? 'task' : 'tasks'}`;
-  io.out(`${where} — ${tasks}\n`);
-
-  const app = findApp();
+  const app = (hooks.findApp ?? findApp)();
   if (!app) {
     io.err(
       'could not find the Osade app to open.\n' +
-        '  set OSADE_APP_BIN to its path, or run the desktop app yourself.\n' +
-        `  the repository is registered either way: ${repo.path}\n`,
+        '  from a source checkout run: node scripts/install-cli.mjs\n' +
+        '  or set OSADE_APP_BIN to the app, then try again.\n',
     );
     return 1;
   }
 
-  // Detached, because the terminal that launched the window should not own it — closing the
-  // shell must not take the app with it, exactly as §18.1 says of the daemon and the substrate.
+  (hooks.spawnApp ?? spawnDetached)(app, target);
+  return 0;
+}
+
+export function spawnDetached(app: AppLaunch, repoPath: string): void {
   // `--repo=<path>` as one token: Electron rewrites the argv it hands a second instance, and a
   // two-token flag loses its value there.
-  const child = spawn(app.command, [...app.args, `--repo=${repo.path}`], {
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  const options: SpawnOptions = {
     detached: true,
     stdio: 'ignore',
-    windowsHide: false,
-  });
-  child.unref();
+    // A new console on Windows would be a second window. Hide it; Electron's own frame is the UI.
+    windowsHide: true,
+    env,
+    ...(app.cwd ? { cwd: app.cwd } : {}),
+  };
 
-  return 0;
+  const child = spawn(app.command, [...app.args, `--repo=${repoPath}`], options);
+  child.unref();
 }
 
 function expandHome(path: string): string {
@@ -92,13 +105,14 @@ function expandHome(path: string): string {
  * electron and the built main, which is why it is last: it is the only one that can be
  * half-present.
  */
-function findApp(): { command: string; args: string[] } | null {
+export function findApp(): AppLaunch | null {
   const explicit = process.env.OSADE_APP_BIN;
   if (explicit && existsSync(explicit)) return { command: explicit, args: [] };
 
+  const here = dirname(fileURLToPath(import.meta.url));
+
   // Packaged: this file runs from <root>/resources/cli/bin.js, and the executable sits at the
   // root beside `resources`.
-  const here = dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
   const packagedRoot = resolve(here, '..', '..');
   for (const name of ['Osade.exe', 'Osade', 'osade']) {
     const candidate = join(packagedRoot, name);
@@ -110,8 +124,8 @@ function findApp(): { command: string; args: string[] } | null {
   const appDir = join(repoRoot, 'apps', 'desktop');
   if (!existsSync(join(appDir, 'dist', 'main', 'electron.js'))) return null;
 
-  const electron = electronFromPackage(appDir);
-  return electron ? { command: electron, args: [appDir] } : null;
+  const electron = electronBinary(appDir, repoRoot);
+  return electron ? { command: electron, args: [appDir], cwd: appDir } : null;
 }
 
 /**
@@ -121,15 +135,11 @@ function findApp(): { command: string; args: string[] } | null {
  * layout is pnpm's business and has changed before, while the package's own node_modules entry is
  * the documented way to find it and is a symlink to whatever the store currently does.
  */
-function electronFromPackage(appDir: string): string | null {
-  const local = join(
-    appDir,
-    'node_modules',
-    'electron',
-    'dist',
-    process.platform === 'win32' ? 'electron.exe' : 'electron',
-  );
-  return existsSync(local) ? local : null;
+function electronBinary(appDir: string, repoRoot: string): string | null {
+  const name = process.platform === 'win32' ? 'electron.exe' : 'electron';
+  for (const dir of [appDir, repoRoot]) {
+    const local = join(dir, 'node_modules', 'electron', 'dist', name);
+    if (existsSync(local)) return local;
+  }
+  return null;
 }
-
-export { OsadeCliError };

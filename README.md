@@ -1,14 +1,10 @@
-
-
-![Osade](./assets/readme-logo.png)
+![Osade](./assets/banner.png)
 
 # Osade
 
 **Run all your coding agents together on real repositories — from one desktop app.**
 
 Local-first · Bring your own agent · Nothing leaves your machine
-
-
 
 ---
 
@@ -34,6 +30,15 @@ pnpm --filter @osade/desktop start
 
 The window opens. Open a folder, type something, press Enter.
 
+Or put `osade` on your PATH from this checkout (Windows and POSIX):
+
+```bash
+node scripts/install-cli.mjs
+```
+
+Open a new terminal, `cd` into any repo, and type `osade .` — the window opens (or comes
+to the front) on that repository, the way `code .` does.
+
 macOS, Linux and Windows. Everything Osade writes lives in `~/.osade`
 (`%USERPROFILE%\.osade` on Windows) — delete it to reset completely.
 
@@ -49,8 +54,6 @@ powershell -File scripts/install-desktop-shortcut.ps1
 ```
 
 This launches the checkout, not a packaged installer.
-
-
 
 ## What you can do with it
 
@@ -101,7 +104,6 @@ probe can't kill a live agent.
 UI didn't update, the write didn't go through the database.
 
 
-
 ## Why it works this way
 
 Open source is closing the door on autonomous AI contributions. Godot banned autonomous agent use.
@@ -120,32 +122,13 @@ The long version is in [docs/OSADE.md](docs/OSADE.md).
 
 Early and moving fast. Usable, not stable.
 
-
-|                                       |                        |
-| ------------------------------------- | ---------------------- |
-| Chats, lanes, multi-agent `@mentions` | working                |
-| Attached and isolated worktrees       | working                |
-| Files, Diff, Checks, Rules            | working                |
-| Approval gates                        | working                |
-| Verification runs                     | working                |
-| Conventions mining                    | partial                |
-| GitHub issues and PRs                 | partial                |
-| Embedded terminal                     | deferred, see ADR 0001 |
-| Layered memory                        | not started            |
-
-
-Expect breaking changes to the database without migrations. `rm -rf ~/.osade` is the supported
-recovery path for now.
-
 ## Docs
 
 
-|                                                    |                                                              |
-| -------------------------------------------------- | ------------------------------------------------------------ |
-| [docs/OSADE.md](docs/OSADE.md)                     | Full spec — architecture, data model, invariants, milestones |
-| [docs/HERDR-CONTRACT.md](docs/HERDR-CONTRACT.md)   | The verified substrate API surface                           |
-| [docs/architechture/adr/](docs/architechture/adr/) | Decision records                                             |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                 | How to work on Osade                                         |
+|                                    |                                                              |
+| ---------------------------------- | ------------------------------------------------------------ |
+| [docs/OSADE.md](docs/OSADE.md)     | Full spec — architecture, data model, invariants, milestones |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to work on Osade                                         |
 
 
 

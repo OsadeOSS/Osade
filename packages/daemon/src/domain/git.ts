@@ -59,8 +59,21 @@ export async function resolveSha(repoPath: string, ref: string): Promise<string>
 }
 
 export async function currentBranch(repoPath: string): Promise<string> {
-  const out = await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  return out.trim();
+  // An unborn repo (`git init` and nothing else) has a symbolic HEAD but no revision, so
+  // `rev-parse --abbrev-ref HEAD` dies with "ambiguous argument 'HEAD'". `osade .` from such a
+  // folder — including a home directory that happens to be an empty git repo — must still open.
+  try {
+    const named = (await git(repoPath, ['symbolic-ref', '--short', 'HEAD'])).trim();
+    if (named.length > 0) return named;
+  } catch {
+    // Detached HEAD is not a symbolic ref.
+  }
+  try {
+    const out = (await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    return out.length > 0 ? out : 'HEAD';
+  } catch {
+    return 'HEAD';
+  }
 }
 
 export async function defaultBranch(repoPath: string): Promise<string> {
