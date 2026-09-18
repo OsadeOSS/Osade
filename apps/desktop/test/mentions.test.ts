@@ -34,10 +34,6 @@ describe('parseMentions', () => {
     expect(parseMentions('ping @claude later', catalog).targets).toEqual([]);
   });
 
-  it('an @ in the middle of a line is not a mention', () => {
-    expect(parseMentions('ping @claude later', catalog).targets).toEqual([]);
-  });
-
   it('unknown ids are left in the shared text', () => {
     const parsed = parseMentions('@ghost do a thing\n@claude real work', catalog);
     expect(parsed.shared).toBe('@ghost do a thing');

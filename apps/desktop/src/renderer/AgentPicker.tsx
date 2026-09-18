@@ -1,6 +1,6 @@
 import { useEffect, type JSX } from 'react';
 
-import { agentColor } from './agent-color.js';
+import { AgentMark } from './agent-icon.js';
 import type { CatalogAgent } from './RepoSettings.js';
 
 /**
@@ -97,16 +97,9 @@ export function AgentPicker({
                 color: agent.installed ? 'var(--ink)' : 'var(--ink-3)',
               }}
             >
-              <span
-                aria-hidden="true"
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  background: agentColor(agent.id),
-                  flexShrink: 0,
-                }}
-              />
+              <span aria-hidden="true" style={{ flexShrink: 0, display: 'flex' }}>
+                <AgentMark name={agent.id} size={16} />
+              </span>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {agent.displayName}
               </span>
