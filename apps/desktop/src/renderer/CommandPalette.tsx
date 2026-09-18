@@ -59,7 +59,7 @@ export function CommandPalette({
       },
       {
         id: 'board',
-        label: 'Show board',
+        label: 'Show kanban',
         run: () => onBoard?.(),
       },
       {

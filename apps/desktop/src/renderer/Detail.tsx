@@ -528,12 +528,14 @@ export function DraftPane({
   submitting,
   catalog,
   pending = [],
+  agentId = null,
   onSend,
 }: {
   optimistic?: string;
   submitting: boolean;
   catalog: CatalogAgent[];
   pending?: PendingLane[];
+  agentId?: string | null;
   onSend: (text: string, photos?: ComposerPhoto[]) => Promise<void>;
 }): JSX.Element {
   return (
@@ -548,6 +550,14 @@ export function DraftPane({
     >
       <header style={{ padding: '14px 16px 12px', borderBottom: '0.5px solid var(--line)' }}>
         <h1 style={{ fontSize: 'var(--t-l)', fontWeight: 600, margin: 0 }}>New chat</h1>
+        {agentId && (
+          <div
+            className="mono"
+            style={{ marginTop: 6, fontSize: 'var(--t-s)', color: agentColor(agentId) }}
+          >
+            {agentId}
+          </div>
+        )}
         <p style={{ margin: '6px 0 0', color: 'var(--ink-2)', fontSize: 'var(--t-s)' }}>
           {attachCheckoutHint()} {isolatedWorktreeHint()} @mention an agent on its own line to
           pick a lane.

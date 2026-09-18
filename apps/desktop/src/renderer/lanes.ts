@@ -64,11 +64,12 @@ export function agentInitials(agentId: string): string {
   return (compact.slice(0, 2) || '?').toUpperCase();
 }
 
-export type BoardColumnId = 'needs' | 'working' | 'review' | 'ready' | 'rest';
+export type BoardColumnId = 'needs' | 'working' | 'failed' | 'review' | 'ready' | 'rest';
 
 export const BOARD_COLUMNS: { id: BoardColumnId; label: string }[] = [
   { id: 'needs', label: 'Needs you' },
   { id: 'working', label: 'Working' },
+  { id: 'failed', label: 'Failed' },
   { id: 'review', label: 'In review' },
   { id: 'ready', label: 'Ready to merge' },
   { id: 'rest', label: 'The rest' },
@@ -78,6 +79,8 @@ export const BOARD_COLUMNS: { id: BoardColumnId; label: string }[] = [
 export function boardColumn(chat: ChatGroup): BoardColumnId {
   if (chat.needsYou) return 'needs';
   if (chat.status === 'implementing' || chat.status === 'verifying') return 'working';
+  if (chat.status === 'verify_failed' || chat.status === 'ci_failed' || chat.status === 'blocked_external')
+    return 'failed';
   if (chat.status === 'pr_open') return 'review';
   if (chat.status === 'merged') return 'ready';
   return 'rest';
@@ -87,12 +90,24 @@ export function boardGroups(chats: ChatGroup[]): Record<BoardColumnId, ChatGroup
   const out: Record<BoardColumnId, ChatGroup[]> = {
     needs: [],
     working: [],
+    failed: [],
     review: [],
     ready: [],
     rest: [],
   };
   for (const chat of chats) out[boardColumn(chat)].push(chat);
+  for (const col of BOARD_COLUMNS) out[col.id].sort((a, b) => chatActivity(b) - chatActivity(a));
   return out;
+}
+
+/** Latest activity across a chat's lanes — most recent first on the board. */
+export function chatActivity(chat: ChatGroup): number {
+  let latest = 0;
+  for (const lane of chat.lanes) {
+    const at = lane.agent?.last_event_at ?? lane.task.created_at;
+    if (at > latest) latest = at;
+  }
+  return latest;
 }
 
 export function worstStatus(statuses: TaskStatus[]): TaskStatus {

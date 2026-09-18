@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { orchestratorId, type TaskStatus } from '@osade/contract';
 
-import { boardColumn, chatLabel, displayBranch, agentInitials, showPinnedNeedsYou, type ChatGroup } from '../src/renderer/lanes.js';
+import { boardColumn, boardGroups, chatActivity, chatLabel, displayBranch, agentInitials, showPinnedNeedsYou, type ChatGroup } from '../src/renderer/lanes.js';
 import { hasBrandLogo } from '../src/renderer/agent-icon.js';
 
 describe('showPinnedNeedsYou', () => {
@@ -24,10 +24,44 @@ describe('boardColumn', () => {
     expect(boardColumn(chat({ status: 'pr_open' }))).toBe('review');
     expect(boardColumn(chat({ status: 'merged' }))).toBe('ready');
     expect(boardColumn(chat({ status: 'queued' }))).toBe('rest');
+    expect(boardColumn(chat({ status: 'idle' }))).toBe('rest');
+    expect(boardColumn(chat({ status: 'stopped' }))).toBe('rest');
+  });
+
+  it('gives failure states their own column instead of burying them in the rest', () => {
+    expect(boardColumn(chat({ status: 'verify_failed' }))).toBe('failed');
+    expect(boardColumn(chat({ status: 'ci_failed' }))).toBe('failed');
+    expect(boardColumn(chat({ status: 'blocked_external' }))).toBe('failed');
   });
 
   it('needs-you wins over working', () => {
     expect(boardColumn(chat({ needsYou: true, status: 'verifying' }))).toBe('needs');
+  });
+
+  it('needs-you wins over failure', () => {
+    expect(boardColumn(chat({ needsYou: true, status: 'verify_failed' }))).toBe('needs');
+  });
+});
+
+describe('boardGroups', () => {
+  it('orders cards within a column by most recent activity', () => {
+    const older = group('c-old', 'implementing', 100);
+    const newer = group('c-new', 'implementing', 300);
+    const middle = group('c-mid', 'implementing', 200);
+    const grouped = boardGroups([older, newer, middle]);
+    expect(grouped.working.map((c) => c.chatId)).toEqual(['c-new', 'c-mid', 'c-old']);
+  });
+
+  it('derives activity from the newest lane when a chat has several', () => {
+    const single = group('c-single', 'implementing', 250);
+    const multi = group('c-multi', 'implementing', 100, 400);
+    expect(chatActivity(multi)).toBe(400);
+    const grouped = boardGroups([single, multi]);
+    expect(grouped.working.map((c) => c.chatId)).toEqual(['c-multi', 'c-single']);
+  });
+
+  it('treats a chat with no lanes as least recent rather than breaking', () => {
+    expect(chatActivity(chat({ status: 'queued' }))).toBe(0);
   });
 });
 
@@ -72,5 +106,21 @@ function chat(over: { status: TaskStatus; needsYou?: boolean }): ChatGroup {
     lanes: [],
     status: over.status,
     needsYou: over.needsYou ?? false,
+  };
+}
+
+function group(chatId: string, status: TaskStatus, ...activityAt: number[]): ChatGroup {
+  return {
+    chatId,
+    title: chatId,
+    lanes: activityAt.map(
+      (at) =>
+        ({
+          agent: { last_event_at: at },
+          task: { created_at: at },
+        }) as unknown as ChatGroup['lanes'][number],
+    ),
+    status,
+    needsYou: false,
   };
 }

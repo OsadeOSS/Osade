@@ -21,8 +21,8 @@ export function Board({
         <section
           key={col.id}
           style={{
-            flex: '0 0 200px',
-            minWidth: 180,
+            flex: '1 1 0',
+            minWidth: 150,
             display: 'flex',
             flexDirection: 'column',
             minHeight: 0,
@@ -53,6 +53,7 @@ export function Board({
                 <button
                   key={chat.chatId}
                   type="button"
+                  title={chatLabel(chat)}
                   onClick={() => onSelect(chat)}
                   onContextMenu={(event) => {
                     event.preventDefault();

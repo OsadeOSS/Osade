@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type JSX } from 'reac
 import type { TaskView } from '@osade/contract';
 
 import { AgentMark } from './agent-icon.js';
+import { AgentPicker, resolveNewChatAgent } from './AgentPicker.js';
 import { Board } from './Board.js';
 import { CommandPalette } from './CommandPalette.js';
 import { photosPrompt, type ComposerPhoto } from './compose-photos.js';
@@ -13,6 +14,7 @@ import { chord } from './chords.js';
 import { type PendingLane } from './delivery.js';
 import { GitHubSignIn, useGithub } from './GitHubSignIn.js';
 import {
+  chatActivity,
   chatLabel,
   displayBranch,
   groupChats,
@@ -44,10 +46,19 @@ type Tab =
       isolate?: boolean;
       checkoutRef?: string;
       baseRef?: string;
+      agentId: string | null;
       optimistic?: string;
       submitting?: boolean;
     }
   | { kind: 'chat'; id: string; focusId?: string; optimistic?: string; isolatedNotice?: string };
+
+interface PendingDraft {
+  repoId: string | null;
+  repoPath: string | null;
+  baseRef?: string;
+  isolate?: boolean;
+  checkoutRef?: string;
+}
 
 export function App(): JSX.Element {
   const { tasks: allTasks, connection } = useLedger();
@@ -81,6 +92,7 @@ export function App(): JSX.Element {
   const [aliases, setAliases] = useState<Record<string, string>>(() => loadAliases());
   const [renaming, setRenaming] = useState<string | null>(null);
   const [pendingLanes, setPendingLanes] = useState<PendingLane[]>([]);
+  const [agentModal, setAgentModal] = useState<PendingDraft | null>(null);
 
   const defaultAgent = agentOverride ?? repo?.defaultAgent ?? null;
   const scoped = repo ? allTasks.filter((t) => t.task.repo_id === repo.repoId) : allTasks;
@@ -101,6 +113,10 @@ export function App(): JSX.Element {
       ? null
       : (selectedChat.lanes.find((l) => l.task.id === activeTab.focusId) ??
         primaryLane(selectedChat));
+
+  // No open tab and nothing to show: the ledger takes the whole window instead
+  // of leaving an empty detail pane beside it.
+  const showDetail = activeTab != null && (activeTab.kind === 'draft' || selectedChat != null);
 
   useEffect(() => {
     if (repo) {
@@ -185,6 +201,8 @@ export function App(): JSX.Element {
         return;
       }
       if (palette) return;
+      // The agent modal owns its keys (Escape closes it); nothing behind it acts.
+      if (agentModal) return;
 
       if (modKey && event.key >= '1' && event.key <= '9') {
         event.preventDefault();
@@ -228,7 +246,7 @@ export function App(): JSX.Element {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [activeId, defaultAgent, flat, menu, palette, repo, selected, selectedChat, tabs]);
+  }, [activeId, agentModal, defaultAgent, flat, menu, palette, repo, selected, selectedChat, tabs]);
 
   function openLane(task: TaskView): void {
     const chatId = task.chatId;
@@ -256,19 +274,41 @@ export function App(): JSX.Element {
     let repoPath = from?.path ?? repo?.path ?? null;
 
     if (repoPath == null) {
-      const picked = await pickRepo();
+      let picked: OpenRepo | null;
+      try {
+        picked = await pickRepo();
+      } catch (err) {
+        // A rejected repoOpen (e.g. "not inside a git repository") used to vanish
+        // into an unhandled rejection and read as "the button does nothing".
+        setActionError(err instanceof Error ? err.message : String(err));
+        return;
+      }
       if (!picked) return;
       repoId = picked.repoId;
       repoPath = picked.path;
       setRepoPaths((current) => ({ ...current, [picked.repoId]: picked.path }));
     }
 
-    const id = crypto.randomUUID();
+    setAgentModal({ repoId, repoPath, isolate: from?.isolate, checkoutRef: from?.checkoutRef, baseRef: from?.baseRef });
+  }
+
+  function openDraftWithAgent(pending: PendingDraft, agentId: string): void {
+    const tabId = crypto.randomUUID();
+    setAgentModal(null);
     setTabs((current) => [
       ...current,
-      { kind: 'draft', id, repoId, repoPath, isolate: from?.isolate, checkoutRef: from?.checkoutRef, baseRef: from?.baseRef },
+      {
+        kind: 'draft',
+        id: tabId,
+        repoId: pending.repoId,
+        repoPath: pending.repoPath,
+        isolate: pending.isolate,
+        checkoutRef: pending.checkoutRef,
+        baseRef: pending.baseRef,
+        agentId,
+      },
     ]);
-    setActiveId(id);
+    setActiveId(tabId);
     setLane('transcript');
   }
 
@@ -330,7 +370,7 @@ export function App(): JSX.Element {
       const targets =
         parsed.targets.length > 0
           ? parsed.targets
-          : [{ agentId: defaultAgent ?? 'claude', text: parsed.shared || message }];
+          : [{ agentId: resolveNewChatAgent(tab.agentId, defaultAgent), text: parsed.shared || message }];
       const first = targets[0]!;
       const firstPrompt = lanePrompt(
         parsed,
@@ -339,7 +379,7 @@ export function App(): JSX.Element {
       );
       if (firstPrompt.length === 0 && photos.length === 0) throw new Error('Write something to send');
       for (const target of targets) {
-        const agentId = target.agentId ?? defaultAgent ?? 'claude';
+        const agentId = target.agentId ?? resolveNewChatAgent(tab.agentId, defaultAgent);
         const prompt = lanePrompt(parsed, { agentId, text: target.text }, message);
         if (prompt.length === 0 && photos.length === 0) continue;
         markPending(tab.id, agentId, prompt || shown, 'starting');
@@ -547,8 +587,11 @@ export function App(): JSX.Element {
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns:
-          view === 'board' ? 'minmax(420px, 1.15fr) minmax(0, 1fr)' : 'minmax(280px, 360px) minmax(0, 1fr)',
+        gridTemplateColumns: !showDetail
+          ? 'minmax(0, 1fr)'
+          : view === 'board'
+            ? 'minmax(420px, 1.15fr) minmax(0, 1fr)'
+            : 'minmax(280px, 360px) minmax(0, 1fr)',
         height: '100%',
         background: 'var(--bg-0)',
       }}
@@ -777,6 +820,7 @@ export function App(): JSX.Element {
         />
       </main>
 
+      {showDetail && (
       <aside style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
         <TabStrip
           tabs={tabs}
@@ -794,6 +838,7 @@ export function App(): JSX.Element {
               optimistic={activeTab.optimistic}
               submitting={Boolean(activeTab.submitting)}
               catalog={catalog}
+              agentId={activeTab.agentId}
               pending={pendingLanes.filter((p) => p.chatId === activeTab.id)}
               onSend={(text, photos) => submitDraft(activeTab, text, photos)}
             />
@@ -870,6 +915,7 @@ export function App(): JSX.Element {
           )}
         </div>
       </aside>
+      )}
 
       <CommandPalette
         open={palette}
@@ -911,6 +957,22 @@ export function App(): JSX.Element {
               (err: Error) => setActionError(err.message),
             );
           }}
+        />
+      )}
+
+      {agentModal && (
+        <AgentPicker
+          agents={catalog}
+          defaultId={resolveNewChatAgent(null, defaultAgent)}
+          repoName={
+            agentModal.repoId != null
+              ? (repo?.repoId === agentModal.repoId
+                  ? repo.name
+                  : (repoPaths[agentModal.repoId] ?? agentModal.repoId))
+              : null
+          }
+          onPick={(agentId) => openDraftWithAgent(agentModal, agentId)}
+          onClose={() => setAgentModal(null)}
         />
       )}
     </div>
@@ -1315,11 +1377,11 @@ function Header({
       </div>
       <button
         type="button"
-        title={view === 'board' ? 'List' : 'Board'}
+        title={view === 'board' ? 'List' : 'Kanban'}
         onClick={() => onView(view === 'board' ? 'list' : 'board')}
         style={{ flexShrink: 0, fontSize: 'var(--t-xs)' }}
       >
-        {view === 'board' ? 'List' : 'Board'}
+        {view === 'board' ? 'List' : 'Kanban'}
       </button>
       {settings ? <div style={{ flexShrink: 0 }}>{settings}</div> : null}
       <button data-new-task onClick={onNew} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
@@ -1497,10 +1559,6 @@ function optimisticLine(message: string, photos: ComposerPhoto[]): string {
   const body = message.trim();
   if (body.length === 0) return tag;
   return tag.length > 0 ? `${body}\n${tag}` : body;
-}
-
-function chatActivity(chat: ChatGroup): number {
-  return Math.max(...chat.lanes.map((t) => t.agent?.last_event_at ?? t.task.created_at));
 }
 
 function repoLabel(
