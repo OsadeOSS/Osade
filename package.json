@@ -29,7 +29,8 @@
     "package": "node scripts/check-signing.mjs && pnpm -r build && node scripts/make-icon.mjs && node scripts/fetch-node-runtime.mjs && node scripts/fetch-substrate-binaries.mjs && electron-builder --config electron-builder.config.cjs",
     "package:dir": "pnpm -r build && node scripts/make-icon.mjs && node scripts/fetch-node-runtime.mjs && node scripts/fetch-substrate-binaries.mjs && electron-builder --config electron-builder.config.cjs --dir",
     "icon": "node scripts/make-icon.mjs",
-    "install-cli": "node scripts/install-cli.mjs"
+    "install-cli": "node scripts/install-cli.mjs",
+    "install-desktop": "node scripts/make-icon.mjs && powershell -File scripts/install-desktop-shortcut.ps1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

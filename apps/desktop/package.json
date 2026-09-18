@@ -1,5 +1,6 @@
 {
   "name": "@osade/desktop",
+  "productName": "Osade",
   "version": "0.0.0",
   "private": true,
   "main": "dist/main/electron.js",

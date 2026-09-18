@@ -3,12 +3,6 @@
 Osade is licensed under Apache-2.0 (see `LICENSE`). This file lists third-party software
 Osade distributes or depends on.
 
-> **Regenerated 2026-09-04.** This replaces `docs/ThirdPartyNotices.txt`, which was Visual
-> Studio Code's notices file, inherited when Osade was planned as a Code-OSS fork. That plan
-> was abandoned; Osade is an Electron shell over its terminal runtime and depends on none of the
-> 60 packages that file listed (TextMate grammars, `microsoft/vscode-*`, `atom/language-*`,
-> `@fig/autocomplete`). It has been deleted rather than trimmed.
-
 ---
 
 ## Distributed in the Osade application

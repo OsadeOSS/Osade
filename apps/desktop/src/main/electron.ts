@@ -27,6 +27,7 @@ import { join, resolve } from 'node:path';
 const OSADE_ROOT = resolve(process.env.OSADE_HOME ?? join(homedir(), '.osade'));
 app.setPath('userData', join(OSADE_ROOT, 'electron'));
 app.setPath('sessionData', join(OSADE_ROOT, 'electron', 'session'));
+app.setAppUserModelId('dev.osade.app');
 
 import { repoFromArgv } from './argv.js';
 import {
@@ -229,6 +230,7 @@ function createWindow(): void {
     // Match --bg-0 so the frame does not flash light before the page paints.
     backgroundColor: '#0F1214',
     icon: windowIcon(),
+    title: 'Osade',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

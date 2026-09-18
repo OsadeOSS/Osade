@@ -33,7 +33,6 @@ import { useRepo, type OpenRepo } from './useRepo.js';
 
 const LANES: Lane[] = ['transcript', 'files', 'checks', 'diff', 'rules'];
 const COLLAPSE_KEY = 'osade.repo-collapsed';
-const VIEW_KEY = 'osade.ledger-view';
 const NAMES_KEY = 'osade.repo-names';
 const GITHUB_SKIP_KEY = 'osade.github-skipped';
 const SIDEBAR_KEY = 'osade.sidebar-width';
@@ -82,13 +81,7 @@ export function App(): JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [lane, setLane] = useState<Lane>('transcript');
-  const [view, setView] = useState<'list' | 'board'>(() => {
-    try {
-      return localStorage.getItem(VIEW_KEY) === 'board' ? 'board' : 'list';
-    } catch {
-      return 'list';
-    }
-  });
+  const [view, setView] = useState<'list' | 'board'>('list');
   const [palette, setPalette] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -121,9 +114,11 @@ export function App(): JSX.Element {
       : (selectedChat.lanes.find((l) => l.task.id === activeTab.focusId) ??
         primaryLane(selectedChat));
 
-  // No open tab and nothing to show: the ledger takes the whole window instead
-  // of leaving an empty detail pane beside it.
-  const showDetail = activeTab != null && (activeTab.kind === 'draft' || selectedChat != null);
+  // List + an open tab: sidebar beside the chat. Kanban is the whole window.
+  const showDetail =
+    view !== 'board' &&
+    activeTab != null &&
+    (activeTab.kind === 'draft' || selectedChat != null);
 
   useEffect(() => {
     if (repo) {
@@ -135,6 +130,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!repo || requestId === 0) return;
     const id = crypto.randomUUID();
+    setView('list');
     setTabs((current) => [
       ...current,
       { kind: 'draft', id, repoId: repo.repoId, repoPath: repo.path, agentId: defaultAgent },
@@ -146,10 +142,6 @@ export function App(): JSX.Element {
   useEffect(() => {
     localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed]));
   }, [collapsed]);
-
-  useEffect(() => {
-    localStorage.setItem(VIEW_KEY, view);
-  }, [view]);
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth));
@@ -271,6 +263,7 @@ export function App(): JSX.Element {
   }, [activeId, agentModal, defaultAgent, flat, menu, palette, repo, selected, selectedChat, tabs]);
 
   function openLane(task: TaskView): void {
+    setView('list');
     const chatId = task.chatId;
     setTabs((current) => {
       const existing = current.find((t) => t.kind === 'chat' && t.id === chatId);
@@ -315,6 +308,7 @@ export function App(): JSX.Element {
   }
 
   function openDraftWithAgent(pending: PendingDraft, agentId: string): void {
+    setView('list');
     const tabId = crypto.randomUUID();
     setAgentModal(null);
     setTabs((current) => [
