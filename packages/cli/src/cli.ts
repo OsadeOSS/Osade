@@ -87,15 +87,16 @@ Usage:
   osade .                                  open the window on this repository
   osade <path>                             open the window on a repository
 
-  osade task list                          the ledger, needs-you first
+  osade task list [--json]               the ledger, needs-you first
   osade task create <repo> <title> [intent]  register a task (does not launch)
   osade task start <task-id>               run the launch sequence (§8.2)
-  osade task show [task-id]                one task's facts and derived status
+  osade task show [task-id] [--json]     one task's facts and derived status
   osade task send [task-id] <text> [--wait]  prompt the agent
   osade task read [task-id] [--lines N]    the agent pane transcript
   osade task archive [task-id]
 
 Task id defaults to $OSADE_TASK_ID, which is set inside every agent lane.
+--json prints the TaskView(s) as JSON for scripts and agents.
 osade . opens the window and does not wait; task verbs need a running daemon.
 `;
 
@@ -117,7 +118,12 @@ export async function main(argv: string[], io: Io = processIo): Promise<number> 
 
   switch (command) {
     case 'list': {
+      const json = rest.includes('--json');
       const tasks = await api.taskList();
+      if (json) {
+        io.out(JSON.stringify(tasks, null, 2) + '\n');
+        return 0;
+      }
       if (tasks.length === 0) {
         io.out('no tasks yet — osade task create <repo> <title>\n');
         return 0;
@@ -155,10 +161,16 @@ export async function main(argv: string[], io: Io = processIo): Promise<number> 
     }
 
     case 'show': {
-      const view = await api.taskGet(currentTaskId(rest[0]));
+      const json = rest.includes('--json');
+      const positional = rest.filter((a) => a !== '--json');
+      const view = await api.taskGet(currentTaskId(positional[0]));
       if (!view) {
         io.err('no such task\n');
         return 1;
+      }
+      if (json) {
+        io.out(JSON.stringify(view, null, 2) + '\n');
+        return 0;
       }
       io.out(
         [
