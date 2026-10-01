@@ -6,16 +6,14 @@ Related: [chat.md](chat.md) for composer routing and lanes; [OSADE.md](OSADE.md)
 
 ## §1 Lane context prepended to a composer send
 
-The renderer never pastes the file, hunk, checks log or rule into the text box. It builds a `ComposerAttach` — a `label` plus a fenced `fence` — and `prependAttach` puts that fence **above** the typed message:
+The renderer never pastes the file, hunk, checks log or rule into the text box. It builds a `ComposerAttach` — a `label` plus a fenced `fence` — and `prependAttach` puts that fence **above** the typed message. Example shape:
 
-```
-```file
-src/auth.ts L12–L40
-…slice…
-```
+    ```file
+    src/auth.ts L12–L40
+    …slice…
+    ```
 
-why did this refresh fail?
-```
+    why did this refresh fail?
 
 Helpers live in `apps/desktop/src/renderer/compose-attach.ts`:
 
