@@ -6,7 +6,7 @@
  * renderer never computes status.
  */
 
-import type { ConventionImpact, ConventionView, MineStatus } from '@osade/contract';
+import type { ConventionImpact, ConventionView, MineStatus, QuickNoteView } from '@osade/contract';
 
 let cachedBase: string | null = null;
 
@@ -175,6 +175,36 @@ export const api = {
 
   conventionImpact: (repoId: string) =>
     call('query', 'conventionImpact', { repoId }) as Promise<ConventionImpact>,
+
+  /**
+   * Quick notes — issue #19. Repo-scoped, so read on demand rather than streamed: a note belongs
+   * to no task and `useLedger` only carries tasks. Every write is followed by a `noteList`, never
+   * by a local patch — §18.1, the renderer renders what the daemon says.
+   */
+  noteList: (repoId: string) =>
+    call('query', 'noteList', { repoId }) as Promise<QuickNoteView[]>,
+
+  noteListOpen: (repoId: string) =>
+    call('query', 'noteListOpen', { repoId }) as Promise<QuickNoteView[]>,
+
+  noteForFile: (repoId: string, file: string) =>
+    call('query', 'noteForFile', { repoId, file }) as Promise<QuickNoteView | null>,
+
+  noteCreate: (input: {
+    repoId: string;
+    text: string;
+    file?: string | null;
+    line?: number | null;
+  }) => call('mutation', 'noteCreate', input) as Promise<QuickNoteView>,
+
+  noteResolve: (id: string, resolved: boolean) =>
+    call('mutation', 'noteResolve', { id, resolved }) as Promise<{ ok: true }>,
+
+  noteEdit: (id: string, text: string) =>
+    call('mutation', 'noteEdit', { id, text }) as Promise<{ ok: true }>,
+
+  noteDelete: (id: string) =>
+    call('mutation', 'noteDelete', { id }) as Promise<{ ok: true }>,
 
   gateDecide: (gateId: string, decision: 'approve' | 'deny') =>
     call('mutation', 'gateDecide', { gateId, decision }) as Promise<{ ok: true }>,

@@ -23,6 +23,38 @@ export function lineRangeFromOffsets(
   return { from, to };
 }
 
+/**
+ * The inverse: the character offset a 1-based line starts at.
+ *
+ * The other half of `lineRangeFromOffsets`, and the one a quick note needs. A note records a
+ * line, and "open `src/login.ts:42`" has to mean the character position of line 42 in whatever
+ * worktree is open now — the note is repo-relative and deliberately survives being read from a
+ * different checkout, so this is recomputed on the text in front of you rather than stored.
+ *
+ * Past the end of the text is clamped, not an error: a note can outlive the file it is about,
+ * and landing at the end of the file beats throwing while someone is trying to read it.
+ */
+export function lineToOffset(text: string, line: number): number {
+  const want = Math.max(1, Math.floor(Number.isFinite(line) ? line : 1));
+  let offset = 0;
+  let current = 1;
+  while (current < want) {
+    const next = text.indexOf('\n', offset);
+    if (next < 0) return text.length;
+    offset = next + 1;
+    current += 1;
+  }
+  return Math.min(offset, text.length);
+}
+
+/** The span a 1-based line occupies, for selecting it in the editor. */
+export function lineSpan(text: string, line: number): { from: number; to: number } {
+  const from = lineToOffset(text, line);
+  const nextBreak = text.indexOf('\n', from);
+  const to = nextBreak < 0 ? text.length : nextBreak;
+  return { from, to };
+}
+
 export function fileAttach(
   path: string,
   text: string,

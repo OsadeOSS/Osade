@@ -11,9 +11,10 @@ import type { TaskView } from '@osade/contract';
 
 import { api } from './api.js';
 import { composeAppend } from './compose-event.js';
-import { fileAttach, lineRangeFromOffsets, type ComposerAttach } from './compose-attach.js';
+import { fileAttach, lineRangeFromOffsets, lineSpan, type ComposerAttach } from './compose-attach.js';
 import { fuzzyPath } from './files-search.js';
 import { flagColour, highlight } from './highlight.js';
+import { useFileOpenReminder } from './useFileOpenReminder.js';
 
 const TREE_KEY = 'osade.files-tree-width';
 const TREE_DEFAULT = 200;
@@ -38,9 +39,35 @@ export interface FsEntry {
 export function Files({
   task,
   onAttach,
+  openPath,
+  onOpenChange,
+  notesRevision = 0,
 }: {
   task: TaskView;
   onAttach?: (attach: ComposerAttach | null) => void;
+  /**
+   * Issue #19 — a quick note's file, to open here when the note is clicked.
+   *
+   * `n` is a counter rather than nothing so that asking for the same file twice opens it
+   * twice; a bare path would be indistinguishable from "no change" the second time and the
+   * click would look broken.
+   */
+  openPath?: { file: string; n: number; line: number | null } | null;
+  /**
+   * Issue #19 — bumped after any note is written or resolved, so a banner for a note the user
+   * just ticked off retires instead of lingering over the file.
+   */
+  notesRevision?: number;
+  /**
+   * Issue #19 — what this lane is reading, reported up so a quick note can be stamped with it.
+   *
+   * A callback, not a window event, and that is the whole correction. This component unmounts
+   * the moment you leave the Files tab, so anything published globally outlives it: switch to
+   * Chat, press the note chord, and you would file a note against a file you closed. Reporting
+   * to the owner instead lets `Detail` drop the context at the same moment this lane goes away,
+   * so a note only ever carries a file that was actually on screen when you wrote it.
+   */
+  onOpenChange?: (open: { file: string | null; line: number | null } | null) => void;
 }): JSX.Element {
   const [width, setWidth] = useState(() => loadWidth());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']));
@@ -66,9 +93,39 @@ export function Files({
   const drafts = useRef(new Map<string, string>());
   const tabs = preview && !pinned.includes(preview) ? [...pinned, preview] : pinned;
   const [range, setRange] = useState<{ from: number; to: number } | null>(null);
+  const { note: reminder, dismiss: reminderDismiss } = useFileOpenReminder(
+    task.task.repo_id,
+    preview,
+    notesRevision,
+  );
   useEffect(() => {
     setRange(null);
   }, [preview]);
+
+  // Report what is being read, so a quick note can be stamped with where it was noticed.
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  useEffect(() => {
+    const report = onOpenChangeRef.current;
+    report?.({ file: preview, line: range?.from ?? null });
+  }, [preview, range]);
+
+  // And un-report on the way out, so a closed Files lane does not leave a file behind.
+  useEffect(() => {
+    const report = onOpenChangeRef.current;
+    return () => report?.(null);
+  }, []);
+
+  // Issue #19 — a note was clicked in the Notes lane; open its file, at its line.
+  const openTarget = openPath?.file ?? null;
+  const openSeq = openPath?.n ?? 0;
+  const openLine = openPath?.line ?? null;
+  const [seek, setSeek] = useState<{ line: number; n: number } | null>(null);
+  useEffect(() => {
+    if (openTarget == null) return;
+    setSelected(openTarget);
+    setSeek(openLine == null ? null : { line: openLine, n: openSeq });
+  }, [openTarget, openSeq, openLine]);
 
   useEffect(() => {
     if (!onAttach) return;
@@ -276,6 +333,34 @@ export function Files({
         }}
       />
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {reminder != null && (
+          // Issue #19 — the passive reminder. A note filed against the file that just opened.
+          // A banner, not a toast, and never a message: a note that interrupts the reading you
+          // opened the file to do has defeated itself.
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              padding: '6px 12px',
+              fontSize: 'var(--t-s)',
+              color: 'var(--st-needs)',
+              background: 'var(--bg-1)',
+              borderBottom: '0.5px solid var(--line)',
+            }}
+          >
+            <span style={{ flex: 1, minWidth: 0 }}>
+              You left a note here: “{reminder.text}”
+            </span>
+            <button
+              type="button"
+              onClick={reminderDismiss}
+              style={{ padding: '0 6px', flexShrink: 0, fontSize: 'var(--t-xs)' }}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {tabs.length > 0 && (
           <div
             style={{
@@ -357,6 +442,7 @@ export function Files({
             if (selected) composeAppend(selected);
           }}
           onSelectRange={(start, end) => setRange(lineRangeFromOffsets(text, start, end))}
+          seek={seek}
         />
       </div>
     </div>
@@ -501,6 +587,7 @@ function FileBody({
   onSave,
   onAsk,
   onSelectRange,
+  seek,
 }: {
   file: { path: string; text: string | null; binary: boolean; truncated: boolean } | null;
   selected: string | null;
@@ -513,6 +600,8 @@ function FileBody({
   onSave: () => void;
   onAsk: () => void;
   onSelectRange?: (start: number, end: number) => void;
+  /** Issue #19 — select this line, because a note says which one and "42" is not a place. */
+  seek?: { line: number; n: number } | null;
 }): JSX.Element {
   if (selected == null) {
     return (
@@ -583,6 +672,7 @@ function FileBody({
           value={text}
           onChange={onChange}
           onSelectRange={(start, end) => onSelectRange?.(start, end)}
+          seek={seek}
         />
       )}
     </>
@@ -594,15 +684,36 @@ function CodeEditor({
   value,
   onChange,
   onSelectRange,
+  seek,
 }: {
   path: string;
   value: string;
   onChange: (next: string) => void;
   onSelectRange?: (start: number, end: number) => void;
+  /** Issue #19 — select this line, because a note says which one and "42" is not a place. */
+  seek?: { line: number; n: number } | null;
 }): JSX.Element {
   const preRef = useRef<HTMLPreElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const tokens = highlight(value, path);
+
+  /**
+   * Seek to a line, by selecting it.
+   *
+   * Selecting rather than placing a caret: a collapsed selection at the very start of a
+   * `<textarea>` does not reliably scroll itself into view, and "I clicked the note and nothing
+   * moved" is indistinguishable from a broken button. Selecting the whole line also fires
+   * `onSelect`, which sets the lane's range — so the composer then carries `path L42` as
+   * context, and the file the note pointed at and the file attached to what you type next are
+   * guaranteed to be the same one.
+   */
+  useEffect(() => {
+    const ta = taRef.current;
+    if (seek == null || ta == null) return;
+    const span = lineSpan(value, seek.line);
+    ta.focus();
+    ta.setSelectionRange(span.from, span.to);
+  }, [seek, value]);
 
   function syncScroll(): void {
     const pre = preRef.current;

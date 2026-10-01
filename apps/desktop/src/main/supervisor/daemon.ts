@@ -198,16 +198,37 @@ export function nodeBinary(): { command: string; isElectron: boolean } {
  *
  * `process.resourcesPath` exists only in a packaged Electron app, which is why it is read
  * defensively rather than assumed.
+ *
+ * Exported for the test that pins the upward walk, because the bug this shape replaced was
+ * invisible from the outside: it compiled, it linted, it worked in a packaged app, and it made
+ * every developer on a source checkout fail to boot.
  */
-function vendoredNodePaths(name: string): string[] {
+export function vendoredNodePaths(name: string): string[] {
   const target = `${process.platform}-${process.arch}`;
   const paths: string[] = [];
 
   const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   if (resources) paths.push(join(resources, 'node', name));
 
-  // A source checkout: apps/desktop/dist/main → repo root.
-  paths.push(join(__dirname, '../../../..', 'vendor', 'node', target, name));
+  // A source checkout. **Walked up, not counted** — and the counting is what put this bug here.
+  //
+  // This file is `src/main/supervisor/daemon.ts`, so it compiles to `dist/main/supervisor/` and
+  // the four `..` it was written for (a comment claiming `__dirname` was `dist/main`) landed on
+  // `apps/` instead of the repo root. Nothing was found, `nodeBinary` fell through to PATH, and
+  // the daemon booted on whatever Node the machine happened to have. On Node 24 that is ABI 137
+  // and `better-sqlite3` — built for 127 — refuses to load, so the app spends 30 seconds waiting
+  // for a daemon that was never going to become healthy and reports exactly that. A packaged app
+  // never noticed, because `resourcesPath` above answers first.
+  //
+  // `viteNodeCli` below walks upward for the same reason and has always been right. Both now do
+  // it the same way, so a future move of this file cannot reintroduce the count.
+  let dir = __dirname;
+  for (let up = 0; up < 8; up += 1) {
+    paths.push(join(dir, 'vendor', 'node', target, name));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
   return paths;
 }
 

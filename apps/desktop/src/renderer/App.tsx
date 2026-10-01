@@ -10,7 +10,7 @@ import { BROWSER_DEFAULT, BROWSER_MAX, BROWSER_MIN, clampBrowserWidth } from './
 import { BrowserPane } from './BrowserPane.js';
 import { CommandPalette } from './CommandPalette.js';
 import { photosPrompt, type ComposerPhoto } from './compose-photos.js';
-import { Detail, DraftPane, type Lane } from './Detail.js';
+import { Detail, DraftPane, type FileContext, type Lane } from './Detail.js';
 import { api } from './api.js';
 import { attachCheckoutHint, isolatedWorktreeHint } from './branch-copy.js';
 import { chord } from './chords.js';
@@ -34,6 +34,8 @@ import {
   unavailableAgentMessage,
   validateMentionedAgents,
 } from './mentions.js';
+import { QuickCapture } from './QuickCapture.js';
+import { notesPrompt } from './quick-notes.js';
 import { contextReposForChat } from './repo-context.js';
 import { RepoSettings, useAgentCatalog } from './RepoSettings.js';
 import { STATUS, TONE_COLOUR, ago, summarise } from './status.js';
@@ -41,7 +43,7 @@ import { titleFrom } from './title.js';
 import { useLedger } from './useLedger.js';
 import { useRepo, type OpenRepo } from './useRepo.js';
 
-const LANES: Lane[] = ['transcript', 'files', 'checks', 'diff', 'rules'];
+const LANES: Lane[] = ['transcript', 'files', 'checks', 'diff', 'rules', 'notes'];
 const COLLAPSE_KEY = 'osade.repo-collapsed';
 const NAMES_KEY = 'osade.repo-names';
 const GITHUB_SKIP_KEY = 'osade.github-skipped';
@@ -110,6 +112,13 @@ export function App(): JSX.Element {
   const [browserWidth, setBrowserWidth] = useState(() => loadBrowserWidth());
   const [browserDrag, setBrowserDrag] = useState(false);
   const browserDragOrigin = useRef<{ x: number; width: number } | null>(null);
+  // Issue #19 — quick notes. `capture` is the floating popover; `fileCtx` is what the chat in
+  // front of you is reading, reported up by its Files lane, so a note is stamped with a file
+  // that was actually on screen. `notesVersion` is bumped after a save so an already-open Notes
+  // lane refetches rather than showing a list that is one note behind.
+  const [capture, setCapture] = useState(false);
+  const [fileCtx, setFileCtx] = useState<FileContext | null>(null);
+  const [notesVersion, setNotesVersion] = useState(0);
 
   const defaultAgent = agentOverride ?? repo?.defaultAgent ?? null;
   const scoped = repo ? allTasks.filter((t) => t.task.repo_id === repo.repoId) : allTasks;
@@ -138,6 +147,23 @@ export function App(): JSX.Element {
     (activeTab.kind === 'draft' || selectedChat != null);
   const showWorkspace = view !== 'board';
   const sidebarVisible = view === 'board' || sidebarOpen;
+
+  /**
+   * Which repository a new note belongs to: the chat in focus, else the open one.
+   *
+   * Notes are repo-scoped, so this has to be a real repository rather than a guess — a note
+   * filed against the wrong repo is a note that never comes back.
+   */
+  const captureRepoId = selected?.task.repo_id ?? repo?.repoId ?? null;
+
+  /** Ctrl+Shift+N with nothing open is a shortcut that appears to do nothing. */
+  function openCapture(): void {
+    if (captureRepoId == null) {
+      setActionError('Open a repository first — quick notes are filed against one');
+      return;
+    }
+    setCapture(true);
+  }
 
   useEffect(() => {
     if (repo) {
@@ -177,6 +203,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     localStorage.setItem(NAMES_KEY, JSON.stringify(aliases));
   }, [aliases]);
+
+  // A closed or switched-away chat must not leave a file behind for the next note.
+  useEffect(() => {
+    setFileCtx(null);
+  }, [activeId, view]);
 
   useEffect(() => {
     localStorage.setItem(BROWSER_KEY, browserOpen ? '1' : '0');
@@ -294,7 +325,26 @@ export function App(): JSX.Element {
         return;
       }
 
-      const digit = event.key >= '1' && event.key <= '5';
+      // Issue #19 — Ctrl/Cmd+Shift+N writes a note without leaving what you were doing, and
+      // Ctrl/Cmd+Shift+Q brings the list up. Both shift-qualified: bare Ctrl+N and Ctrl+Q are
+      // conventional for something else in most tools, and this app is where people type.
+      //
+      // After the palette and agent-modal guards rather than with the other chords, because
+      // unlike Ctrl+T these are about the thing already on screen — reopening the list behind
+      // an open palette would move the ground under whatever the palette is about to do.
+      if (modKey && event.shiftKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        openCapture();
+        return;
+      }
+      if (modKey && event.shiftKey && event.key.toLowerCase() === 'q') {
+        event.preventDefault();
+        setView('list');
+        setLane((current) => (current === 'notes' ? 'transcript' : 'notes'));
+        return;
+      }
+
+      const digit = event.key >= '1' && event.key <= '6';
       if (digit && selected) {
         event.preventDefault();
         setLane(LANES[Number(event.key) - 1]!);
@@ -608,7 +658,7 @@ export function App(): JSX.Element {
     photos: ComposerPhoto[] = [],
   ): Promise<void> {
     const planted = await plantPhotos(taskId, photos);
-    const payload = photosPrompt(planted, text);
+    const payload = await withNotes(taskId, photosPrompt(planted, text));
     if (payload.length === 0) throw new Error('Write something to send');
     const view = chats.find((t) => t.task.id === taskId);
     const live =
@@ -621,6 +671,31 @@ export function App(): JSX.Element {
       return;
     }
     await Promise.all([api.taskLaunch(taskId), sending]);
+  }
+
+  /**
+   * Issue #19 — put the repository's open notes in front of the message.
+   *
+   * This is the whole feature in one function: a note nobody reads is a note that does not
+   * exist, and the agent is the only reader that matters.
+   *
+   * Read here, at send time, rather than cached in state. Every other message would then carry
+   * whatever the panel happened to have loaded when it was last opened, and the one message
+   * where the note is wrong is the one sent right after writing it. One loopback query on a
+   * path that already plants photos and launches a worktree is not the cost worth optimising.
+   *
+   * A daemon that cannot answer must not cost you the message: on failure the prompt goes out
+   * unchanged, and the absence of notes is a smaller problem than the absence of the message.
+   */
+  async function withNotes(taskId: string, payload: string): Promise<string> {
+    const repoId = chats.find((t) => t.task.id === taskId)?.task.repo_id ?? repo?.repoId ?? null;
+    if (repoId == null) return payload;
+    try {
+      return notesPrompt(await api.noteListOpen(repoId), payload);
+    } catch (err) {
+      window.osade?.log?.(`could not read quick notes: ${(err as Error).message}`);
+      return payload;
+    }
   }
 
   async function plantPhotos(taskId: string, photos: ComposerPhoto[]): Promise<string[]> {
@@ -1108,7 +1183,11 @@ export function App(): JSX.Element {
                   );
                 })().catch((err: Error) => setActionError(err.message));
               }}
+              onCaptureNote={openCapture}
+              notesVersion={notesVersion}
+              onFileContextChange={setFileCtx}
             />
+
           ) : (
             <NothingSelected
               hasChats={groups.length > 0}
@@ -1210,6 +1289,21 @@ export function App(): JSX.Element {
           }
           onPick={(agentId) => openDraftWithAgent(agentModal, agentId)}
           onClose={() => setAgentModal(null)}
+        />
+      )}
+
+      {/*
+        Quick capture — issue #19. At the root rather than inside the detail pane, because it
+        has to work from anywhere: the point is writing a note down without losing your place,
+        and a popover scoped to one pane is a popover that is closed when you are in another.
+      */}
+      {capture && captureRepoId != null && (
+        <QuickCapture
+          repoId={captureRepoId}
+          file={fileCtx?.file ?? null}
+          line={fileCtx?.line ?? null}
+          onClose={() => setCapture(false)}
+          onSaved={() => setNotesVersion((n) => n + 1)}
         />
       )}
     </div>

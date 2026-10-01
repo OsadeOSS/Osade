@@ -16,6 +16,7 @@ import { lanePhase, type PendingLane } from './delivery.js';
 import { Files } from './Files.js';
 import { GateCard } from './GateCard.js';
 import { LaneTerminal } from './LaneTerminal.js';
+import { QuickNotes } from './QuickNotesPanel.js';
 import {
   nextOpenedTerminal,
   retainLaneTerminal,
@@ -28,7 +29,19 @@ import type { ContextRepo } from './repo-context.js';
 import { Transcript } from './Transcript.js';
 import { VerifyPlanReview } from './VerifyPlanReview.js';
 
-export type Lane = 'transcript' | 'files' | 'checks' | 'diff' | 'rules';
+export type Lane = 'transcript' | 'files' | 'checks' | 'diff' | 'rules' | 'notes';
+
+/**
+ * Issue #19 — the file a quick note is about.
+ *
+ * `file` is repository-relative. It is not an absolute path and not a worktree path, because
+ * the Files lane hands out paths relative to the task's cwd and the whole point of filing a
+ * note against a file is being able to read it back from a *different* worktree later.
+ */
+export interface FileContext {
+  file: string | null;
+  line: number | null;
+}
 
 const PANES: { id: Lane; label: string; chord: string }[] = [
   { id: 'transcript', label: 'Chat', chord: '1' },
@@ -36,6 +49,7 @@ const PANES: { id: Lane; label: string; chord: string }[] = [
   { id: 'checks', label: 'Checks', chord: '3' },
   { id: 'diff', label: 'Diff', chord: '4' },
   { id: 'rules', label: 'Rules', chord: '5' },
+  { id: 'notes', label: 'Notes', chord: '6' },
 ];
 
 export function Detail({
@@ -52,9 +66,12 @@ export function Detail({
   onNewIsolatedChat,
   onMoveToBranch,
   onOpenPrLane,
-  contextRepos = [],
+contextRepos = [],
   onAddContextRepo,
   onRemoveContextRepo,
+  onCaptureNote,
+  notesVersion,
+  onFileContextChange,
 }: {
   chat: ChatGroup;
   focusId: string;
@@ -69,9 +86,15 @@ export function Detail({
   onNewIsolatedChat: (opts: { checkoutRef?: string; baseRef?: string }) => void;
   onMoveToBranch: (checkoutRef: string) => void;
   onOpenPrLane: () => void;
-  contextRepos?: ContextRepo[];
+contextRepos?: ContextRepo[];
   onAddContextRepo?: () => void;
   onRemoveContextRepo?: (repoId: string) => void;
+  /** Issue #19 — open the quick-capture popover. */
+  onCaptureNote: () => void;
+  /** Issue #19 — bumped after a quick-capture save, so this lane refetches. */
+  notesVersion: number;
+  /** Issue #19 — hand the open file up so the capture popover can stamp a note with it. */
+  onFileContextChange: (open: FileContext | null) => void;
 }): JSX.Element {
   const [filter, setFilter] = useState<string | null>(null);
   const [chatSurface, setChatSurface] = useState<'chat' | 'terminal'>('chat');
@@ -80,7 +103,32 @@ export function Detail({
   const [attachDismissed, setAttachDismissed] = useState(false);
   const [modHeld, setModHeld] = useState(false);
   const [branchOfferDismissed, setBranchOfferDismissed] = useState(false);
+  /** Issue #19 — a note's file and line, to open in the Files lane when the note is clicked. */
+  const [noteTarget, setNoteTarget] = useState<{ file: string; line: number | null; n: number } | null>(
+    null,
+  );
+  /**
+   * Issue #19 — what this chat's Files lane is reading, handed up to the quick-capture popover.
+   *
+   * Held here rather than in a module-level event because this component knows the two things
+   * that make the answer true: which lane is focused, and which task it belongs to. A note is
+   * only about a file if that file was on screen when the note was written, and `Files`
+   * unmounting on `{lane === 'files' && …}` is exactly the moment that stops being true.
+   */
+  const [fileContext, setFileContext] = useState<FileContext | null>(null);
   const focused = chat.lanes.find((t) => t.task.id === focusId) ?? chat.lanes[0]!;
+
+  // A note must never inherit a file from a lane the reader is not looking at. Two ways that
+  // happens in this app, both handled here: switching tabs away from Files unmounts the lane
+  // (which clears it through the Files teardown above), and switching *lanes* moves the answer
+  // to a different task's working tree entirely.
+  useEffect(() => {
+    setFileContext(null);
+  }, [focused.task.id]);
+
+  useEffect(() => {
+    onFileContextChange(fileContext);
+  }, [fileContext, onFileContextChange]);
   const rememberedTerminal = nextOpenedTerminal(openedTerminal, focused.task.id, chatSurface);
   if (rememberedTerminal !== openedTerminal) setOpenedTerminal(rememberedTerminal);
   const terminalVisible = terminalSurfaceVisible(lane, chatSurface);
@@ -405,7 +453,14 @@ export function Detail({
           </div>
         )}
         {lane === 'files' && (
-          <Files key={focused.task.id} task={focused} onAttach={setLaneAttach} />
+          <Files
+            key={focused.task.id}
+            task={focused}
+            onAttach={setLaneAttach}
+            openPath={noteTarget}
+            onOpenChange={setFileContext}
+            notesRevision={notesVersion}
+          />
         )}
         {lane === 'checks' && (
           <>
@@ -422,6 +477,19 @@ export function Detail({
         )}
         {lane === 'rules' && (
           <Conventions repoId={focused.task.repo_id} onAttach={setLaneAttach} />
+        )}
+        {lane === 'notes' && (
+          <QuickNotes
+            repoId={focused.task.repo_id}
+            refreshKey={notesVersion}
+            onCapture={onCaptureNote}
+            onOpenFile={(file, line) => {
+              // `n` is a counter, not a flag: clicking the same note twice has to open it
+              // twice, and a file path alone would look unchanged the second time.
+              setNoteTarget({ file, line, n: (noteTarget?.n ?? 0) + 1 });
+              onLane('files');
+            }}
+          />
         )}
       </div>
 

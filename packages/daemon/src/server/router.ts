@@ -7,6 +7,7 @@ import {
   ConventionImpact,
   ConventionView,
   MineStatus,
+  QuickNoteView,
   TaskId,
   TaskStatus,
   TaskView,
@@ -47,6 +48,16 @@ import {
   repoWorkingStatus,
 } from '../domain/git.js';
 import { toTaskView } from '../domain/task-view.js';
+import {
+  createNote,
+  deleteNote,
+  editNote,
+  listNotes,
+  listOpenNotes,
+  NoteError,
+  openNoteForFile,
+  setNoteResolved,
+} from '../domain/quick-notes.js';
 import { saveChatPhotos } from '../domain/chat-photos.js';
 import { deriveVerifyPlan, type VerifyStep } from '../domain/verify-plan.js';
 import { isAttached, taskCwd } from '../domain/cwd.js';
@@ -1218,6 +1229,79 @@ export const appRouter = t.router({
       requireKnowledge(ctx).reject(input.id, input.reason);
       return { ok: true as const };
     }),
+
+  /**
+   * Quick notes — issue #19. "Noticed, not fixing yet", scoped to a repository.
+   *
+   * Read over tRPC rather than pushed: a note belongs to a repository, not to a task, and §5.4's
+   * CDC poller re-reads a `TaskView` per `change_log` row. `convention` and `verify_plan` set
+   * the precedent, and the renderer refetches after a write rather than patching local state.
+   */
+  noteList: t.procedure
+    .input(z.object({ repoId: z.string().min(1) }))
+    .output(z.array(QuickNoteView))
+    .query(({ ctx, input }) => listNotes(ctx.db, input.repoId)),
+
+  /** Only the open ones, oldest first — what `notesPrompt` puts in front of an agent. */
+  noteListOpen: t.procedure
+    .input(z.object({ repoId: z.string().min(1) }))
+    .output(z.array(QuickNoteView))
+    .query(({ ctx, input }) => listOpenNotes(ctx.db, input.repoId)),
+
+  /** The reminder hook's lookup: is there an open note filed against this file? */
+  noteForFile: t.procedure
+    .input(z.object({ repoId: z.string().min(1), file: z.string().min(1) }))
+    .output(QuickNoteView.nullable())
+    .query(({ ctx, input }) => openNoteForFile(ctx.db, input.repoId, input.file)),
+
+  noteCreate: t.procedure
+    .input(
+      z.object({
+        repoId: z.string().min(1),
+        text: z.string(),
+        file: z.string().nullish(),
+        line: z.number().int().min(1).nullish(),
+      }),
+    )
+    .output(QuickNoteView)
+    .mutation(({ ctx, input }) =>
+      note(ctx, () =>
+        createNote(
+          ctx.db,
+          {
+            repoId: input.repoId,
+            text: input.text,
+            file: input.file ?? null,
+            line: input.line ?? null,
+          },
+          ctx.now(),
+        ),
+      ),
+    ),
+
+  noteResolve: t.procedure
+    .input(z.object({ id: z.string().min(1), resolved: z.boolean() }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      note(ctx, () => setNoteResolved(ctx.db, input.id, input.resolved, ctx.now()));
+      return { ok: true as const };
+    }),
+
+  noteEdit: t.procedure
+    .input(z.object({ id: z.string().min(1), text: z.string() }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      note(ctx, () => editNote(ctx.db, input.id, input.text));
+      return { ok: true as const };
+    }),
+
+  noteDelete: t.procedure
+    .input(z.object({ id: z.string().min(1) }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      note(ctx, () => deleteNote(ctx.db, input.id));
+      return { ok: true as const };
+    }),
 });
 
 /**
@@ -1298,6 +1382,23 @@ function requireRepoPath(ctx: DaemonContext, repoId: string): string {
     | undefined;
   if (!repo) throw new TRPCError({ code: 'NOT_FOUND', message: 'unknown repo' });
   return repo.path;
+}
+
+/**
+ * Run a quick-note write, turning its refusal into something the composer can show.
+ *
+ * `NoteError` is always something the person can fix by typing something else — an empty note,
+ * a note too long, an id that no longer exists — so `BAD_REQUEST` with the domain's own words.
+ * `humanizeDaemonError` passes a short message through untouched, so "a note cannot be empty"
+ * reaches the composer as itself rather than as a tRPC envelope.
+ */
+function note<T>(ctx: DaemonContext, run: () => T): T {
+  try {
+    return run();
+  } catch (err) {
+    if (!(err instanceof NoteError)) throw err;
+    throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+  }
 }
 
 export type AppRouter = typeof appRouter;

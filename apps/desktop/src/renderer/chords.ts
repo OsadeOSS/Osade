@@ -3,13 +3,17 @@ export function isMac(): boolean {
 }
 
 /** Visible chord labels. Unicode arrows vanish in Plex on Windows. */
-export function chord(key: 'k' | 'n' | 't' | 'w' | 'b' | 'enter' | 'backspace'): string {
+export function chord(
+  key: 'k' | 'n' | 't' | 'w' | 'b' | 'note' | 'notes' | 'enter' | 'backspace',
+): string {
   if (isMac()) {
     if (key === 'k') return '⌘K';
     if (key === 'n' || key === 't') return '⌘T';
     if (key === 'w') return '⌘W';
-    // The browser pane's chord is the only shift-qualified one here, so it is spelled out.
+    // Both shift-qualified chords are spelled out: bare ⌘B and ⌘Q are conventional elsewhere.
     if (key === 'b') return '⌘⇧B';
+    if (key === 'note') return '⌘⇧N';
+    if (key === 'notes') return '⌘⇧Q';
     if (key === 'enter') return '⌘↵';
     return '⌘⌫';
   }
@@ -17,6 +21,8 @@ export function chord(key: 'k' | 'n' | 't' | 'w' | 'b' | 'enter' | 'backspace'):
   if (key === 'n' || key === 't') return 'Ctrl+T';
   if (key === 'w') return 'Ctrl+W';
   if (key === 'b') return 'Ctrl+Shift+B';
+  if (key === 'note') return 'Ctrl+Shift+N';
+  if (key === 'notes') return 'Ctrl+Shift+Q';
   if (key === 'enter') return 'Ctrl+Enter';
   return 'Ctrl+Backspace';
 }

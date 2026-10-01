@@ -1,5 +1,6 @@
 import type { ChatTurn, TaskView } from '@osade/contract';
 
+import { stripNotesPrompt } from './quick-notes.js';
 import { stripContextBlock } from './repo-context.js';
 
 export interface ChatLine {
@@ -20,17 +21,21 @@ export interface ChatLine {
 
 /** Strip the sibling-lane digest so it never shows up as a chat bubble. */
 export function visibleUserText(text: string): string {
-  return stripContextBlock(text)
-    .replace(/<osade_lanes>[\s\S]*?<\/osade_lanes>\s*/g, '')
-    .replace(/<osade_collab>[\s\S]*?<\/osade_collab>\s*/g, '')
-    .replace(/```photos\n[\s\S]*?```\s*/g, (block) => {
-      const n = block
-        .split('\n')
-        .filter((line) => line.length > 0 && !line.startsWith('```')).length;
-      return n > 0 ? `(${n} ${n === 1 ? 'photo' : 'photos'})\n` : '';
-    })
-    .replace(/The user pasted these photos\. Open each file and look at it\.\s*/g, '')
-    .trim();
+// `stripNotesPrompt` (#19) wraps the chain rather than joining it: the quick-note block is its
+  // own tag and can be lifted out at either end, and it trims — which is what this chain used to
+  // do itself.
+  return stripNotesPrompt(
+    stripContextBlock(text)
+      .replace(/<osade_lanes>[\s\S]*?<\/osade_lanes>\s*/g, '')
+      .replace(/<osade_collab>[\s\S]*?<\/osade_collab>\s*/g, '')
+      .replace(/```photos\n[\s\S]*?```\s*/g, (block) => {
+        const n = block
+          .split('\n')
+          .filter((line) => line.length > 0 && !line.startsWith('```')).length;
+        return n > 0 ? `(${n} ${n === 1 ? 'photo' : 'photos'})\n` : '';
+      })
+      .replace(/The user pasted these photos\. Open each file and look at it\.\s*/g, ''),
+  );
 }
 
 /**

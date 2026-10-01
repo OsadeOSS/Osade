@@ -478,6 +478,39 @@ CREATE TRIGGER chat_context_fanout_delete AFTER DELETE ON chat_context BEGIN
 END;
 `;
 
+/**
+ * M14 — quick notes: "noticed, not fixing yet", scoped to a repository.
+ *
+ * Numbered 14, not 12: #13 landed two migrations of its own (M012 stream text, M013 chat
+ * context) while this was open, and migration ids are dense and never reused — a second M012
+ * would have `schema_migration` record the first one as applied and silently skip whichever ran
+ * second.
+ *
+ * Repo-scoped and deliberately **not** in `CDC_TABLES`. §5.4's CDC poller collapses
+ * `change_log` by task id and re-reads a `TaskView` per row, and a note belongs to no task —
+ * putting it in `CDC_TABLES` would mean a trigger writing a task id a note does not have. So
+ * notes are read over tRPC on demand, exactly like `convention` and `verify_plan`, and the
+ * renderer refetches after a write. Extending §5.4 to a second key space is a change to the
+ * spec and belongs in its own PR, argued on its own merits.
+ *
+ * `resolved_at` and not a status column: §6 is a blanket rule and
+ * `test/integration/cdc.test.ts` checks this table along with every other one.
+ */
+const M014_QUICK_NOTES = `
+CREATE TABLE quick_note (
+  id          TEXT PRIMARY KEY,
+  repo_id     TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+  text        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  -- Set when the user resolves it. NULL means still open (§6: never a status column).
+  resolved_at INTEGER,
+  -- Repository-relative, so a note taken in a worktree still points at the same file.
+  file        TEXT,
+  line        INTEGER
+);
+CREATE INDEX quick_note_repo_idx ON quick_note(repo_id, resolved_at, created_at);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     id: 1,
@@ -543,5 +576,10 @@ export const MIGRATIONS: readonly Migration[] = [
     id: 13,
     name: 'chat context repositories, read-only unless promoted',
     sql: M013_CHAT_CONTEXT,
+  },
+  {
+    id: 14,
+    name: 'quick notes, repo-scoped, resolve is a timestamp',
+    sql: M014_QUICK_NOTES,
   },
 ];

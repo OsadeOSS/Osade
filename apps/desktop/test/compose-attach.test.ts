@@ -5,9 +5,46 @@ import {
   fileAttach,
   hunkAttach,
   lineRangeFromOffsets,
+  lineSpan,
+  lineToOffset,
   prependAttach,
   rulesAttach,
 } from '../src/renderer/compose-attach.js';
+
+describe('lineToOffset', () => {
+  const text = 'one\ntwo\nthree\nfour';
+
+  it('maps a 1-based line to its first character', () => {
+    expect(lineToOffset(text, 1)).toBe(0);
+    expect(lineToOffset(text, 2)).toBe(4);
+    expect(lineToOffset(text, 3)).toBe(8);
+  });
+
+  it('clamps past the end rather than throwing', () => {
+    // A note can outlive the file it is about; landing at the end beats an exception while
+    // someone is trying to read the file.
+    expect(lineToOffset(text, 99)).toBe(text.length);
+    expect(lineToOffset('', 3)).toBe(0);
+  });
+
+  it('refuses a line that is not a line', () => {
+    expect(lineToOffset(text, 0)).toBe(0);
+    expect(lineToOffset(text, -5)).toBe(0);
+    expect(lineToOffset(text, Number.NaN)).toBe(0);
+  });
+
+  it('round-trips with lineRangeFromOffsets', () => {
+    const span = lineSpan(text, 3);
+    expect(span).toEqual({ from: 8, to: 13 });
+    expect(lineRangeFromOffsets(text, span.from, span.to)).toEqual({ from: 3, to: 3 });
+  });
+
+  it('gives the last line a span that stops at the end of the text', () => {
+    expect(lineSpan(text, 4)).toEqual({ from: 14, to: 18 });
+    // Past the end, the span collapses to the end of the text rather than failing.
+    expect(lineSpan('one\ntwo', 9)).toEqual({ from: 7, to: 7 });
+  });
+});
 
 describe('prependAttach', () => {
   it('puts the fence before the message so parseMentions sees it as shared preamble', () => {
