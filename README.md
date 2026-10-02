@@ -98,7 +98,7 @@ terminal substrate  PTYs, worktrees, agent detection, session persistence
 Osade doesn't reimplement terminals. A headless substrate owns PTYs, VT parsing, git worktrees and
 agent process detection; Osade drives it over a JSON API. Watching an agent live opens a real
 terminal client attached to the same session — embedding the terminal is deliberately deferred
-([ADR 0001](docs/architechture/adr/0001-no-embedded-terminal-in-m0.md)).
+([ADR 0001](docs/architecture/adr/0001-no-embedded-terminal-in-m0.md)).
 
 Two invariants are worth knowing if you read the code:
 
@@ -138,7 +138,7 @@ Node, its own cookie jar — and it opens `http` and `https` only.
 
 |                                    |                                                              |
 | ---------------------------------- | ------------------------------------------------------------ |
-| [docs/architechture.md](docs/architechture.md) | How it is built — processes, boundaries, invariants, in depth |
+| [docs/architecture.md](docs/architecture.md) | How it is built — processes, boundaries, invariants, in depth |
 | [docs/OSADE.md](docs/OSADE.md)     | Full spec — architecture, data model, invariants, milestones |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to work on Osade                                         |
 
