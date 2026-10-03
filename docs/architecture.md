@@ -1004,7 +1004,7 @@ The system is built so that a missing dependency degrades a feature rather than 
 ## 21. Known deferrals and loose ends
 
 - **ADR 0001 — no embedded terminal.** Watching an agent live attaches a real terminal client to
-  the same session. `docs/architechture/adr/` is referenced from the README but does not exist in
+  the same session. `docs/architecture/adr/` is referenced from the README but does not exist in
   this tree yet; ADR 0001 and ADR 0002 (vendored `backend/` source) are cited from source
   comments and `pin.json` rather than written up.
 - **§18.2 surface transport** (utility process + `MessagePort` for cell frames) is unimplemented.
