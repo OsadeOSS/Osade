@@ -34,12 +34,20 @@ import {
 } from './mentions.js';
 import { QuickCapture } from './QuickCapture.js';
 import { notesPrompt } from './quick-notes.js';
-import { ProjectSidebar, type ProjectGroup } from './ProjectSidebar.js';
+import {
+  ProjectSidebar,
+  terminalAgentTone,
+  type ProjectActions,
+  type ProjectGroup,
+  type TerminalAgentRow,
+} from './ProjectSidebar.js';
 import { contextReposForChat } from './repo-context.js';
 import { RepoSettings, useAgentCatalog } from './RepoSettings.js';
 import { ShellIcon } from './shell-icon.js';
 import { STATUS, summarise } from './status.js';
 import { StatusBar } from './StatusBar.js';
+import { withProcess, withTitle, type TerminalAgent } from './terminal-agent.js';
+import { TerminalWorkspace } from './TerminalWorkspace.js';
 import { titleFrom } from './title.js';
 import { useLedger } from './useLedger.js';
 import { useRepo, type OpenRepo } from './useRepo.js';
@@ -48,6 +56,10 @@ const COLLAPSE_KEY = 'osade.repo-collapsed';
 const NAMES_KEY = 'osade.repo-names';
 const GITHUB_SKIP_KEY = 'osade.github-skipped';
 const SIDEBAR_KEY = 'osade.sidebar-width';
+const OPENED_FOLDERS_KEY = 'osade.opened-folders';
+const PINNED_PROJECTS_KEY = 'osade.pinned-projects';
+const HIDDEN_PROJECTS_KEY = 'osade.hidden-projects';
+const TERMINAL_TABS_KEY = 'osade.terminal-tabs';
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 640;
 const SIDEBAR_DEFAULT = 320;
@@ -73,7 +85,16 @@ type Tab =
       submitting?: boolean;
     }
   | { kind: 'chat'; id: string; focusId?: string; optimistic?: string; isolatedNotice?: string }
-  | { kind: 'terminal'; id: string; repoId: string | null; cwd: string; shell: ShellKind; title: string };
+  | TerminalTab;
+
+type TerminalTab = {
+  kind: 'terminal';
+  id: string;
+  repoId: string | null;
+  cwd: string;
+  shell: ShellKind;
+  title: string;
+};
 
 interface PendingDraft {
   repoId: string | null;
@@ -99,8 +120,69 @@ export function App(): JSX.Element {
   const [githubWelcome, setGithubWelcome] = useState(false);
   const [agentOverride, setAgentOverride] = useState<string | null>(null);
   const [repoPaths, setRepoPaths] = useState<Record<string, string>>({});
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  // Folders picked through Open folder, listed in the sidebar before they have any chats.
+  const [openedFolders, setOpenedFolders] = useState<OpenedFolder[]>(loadOpenedFolders);
+  const [pinnedProjects, setPinnedProjects] = useState<string[]>(() => loadIdList(PINNED_PROJECTS_KEY));
+  // Removed from the sidebar; their chats are kept, and opening the folder again brings it back.
+  const [hiddenProjects, setHiddenProjects] = useState<string[]>(() => loadIdList(HIDDEN_PROJECTS_KEY));
+  const [editors, setEditors] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => {
+    void window.osade?.editors?.().then(setEditors, () => undefined);
+  }, []);
+
+  // Agents started by hand in terminal tabs, read from the titles they set. Keyed by tab id.
+  const [terminalAgents, setTerminalAgents] = useState<Record<string, TerminalAgent>>({});
+  // Each terminal tab's latest title, so an agent the process scan finds late still gets it.
+  const terminalTitles = useRef<Record<string, string>>({});
+  // Terminal tabs come back on launch. Their shells live in the daemon, which outlives the
+  // window, so each reopened tab reattaches to its running shell with its scrollback.
+  const [restored] = useState(loadTerminalTabs);
+  const [tabs, setTabs] = useState<Tab[]>(() => restored.tabs);
+  const [activeId, setActiveId] = useState<string | null>(() => restored.activeId);
+  useEffect(() => {
+    saveTerminalTabs(
+      tabs.filter((tab): tab is TerminalTab => tab.kind === 'terminal'),
+      activeId,
+    );
+  }, [tabs, activeId]);
+
+  const hasTerminalTab = tabs.some((tab) => tab.kind === 'terminal');
+
+  useEffect(() => {
+    if (!hasTerminalTab) return;
+    let stop = false;
+    let timer: number | undefined;
+    const poll = (): void => {
+      void api
+        .terminalAgents()
+        .then((found) => {
+          if (stop) return;
+          const byTab = new Map(found.map((row) => [row.id, row]));
+          setTerminalAgents((current) => {
+            const next: Record<string, TerminalAgent> = {};
+            let changed = false;
+            for (const id of new Set([...Object.keys(current), ...byTab.keys()])) {
+              const prev = current[id] ?? null;
+              let agent = withProcess(prev, byTab.get(id) ?? null, Date.now());
+              const title = terminalTitles.current[id];
+              if (agent != null && agent !== prev && title != null) agent = withTitle(agent, title, Date.now());
+              if (agent !== prev) changed = true;
+              if (agent != null) next[id] = agent;
+            }
+            return changed ? next : current;
+          });
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!stop) timer = window.setTimeout(poll, 2_000);
+        });
+    };
+    poll();
+    return () => {
+      stop = true;
+      window.clearTimeout(timer);
+    };
+  }, [hasTerminalTab]);
   // The right panel, like Orca's: Files, Checks, Changes, Rules, Notes beside the chat.
   const [panel, setPanel] = useState<PanelLane>('diff');
   const [panelOpen, setPanelOpen] = useState(() => {
@@ -124,7 +206,10 @@ export function App(): JSX.Element {
   const [view, setView] = useState<'list' | 'board'>('list');
   const [palette, setPalette] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  // A row's right-click menu: a chat lane (`task`) or a terminal tab (`terminal`).
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number; kind?: 'task' | 'terminal' } | null>(
+    null,
+  );
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
   const [aliases, setAliases] = useState<Record<string, string>>(() => loadAliases());
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -155,6 +240,19 @@ export function App(): JSX.Element {
   const working = chats.filter((t) => t.status === 'implementing' || t.status === 'verifying');
 
   const byRepo = useMemo(() => groupByRepo(chats), [chats]);
+
+  // Projects known only from their chats have no folder yet; ask once so the menu can use it.
+  const askedPaths = useRef(new Set<string>());
+  useEffect(() => {
+    for (const { repoId } of byRepo) {
+      if (repoPaths[repoId] != null || askedPaths.current.has(repoId)) continue;
+      askedPaths.current.add(repoId);
+      void api.repoPath(repoId).then(
+        ({ path }) => setRepoPaths((current) => (current[repoId] ? current : { ...current, [repoId]: path })),
+        () => undefined,
+      );
+    }
+  }, [byRepo, repoPaths]);
   const flat = useMemo(() => byRepo.flatMap((g) => g.chats), [byRepo]);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
@@ -178,7 +276,8 @@ export function App(): JSX.Element {
    * Notes are repo-scoped, so this has to be a real repository rather than a guess — a note
    * filed against the wrong repo is a note that never comes back.
    */
-  const captureRepoId = selected?.task.repo_id ?? repo?.repoId ?? null;
+  const captureRepoId =
+    (activeTab?.kind === 'terminal' ? activeTab.repoId : null) ?? selected?.task.repo_id ?? repo?.repoId ?? null;
 
   /** Ctrl+Shift+N with nothing open is a shortcut that appears to do nothing. */
   function openCapture(): void {
@@ -435,6 +534,83 @@ export function App(): JSX.Element {
     setHistoryTick((n) => n + 1);
   }
 
+  function rememberFolder(folder: { repoId: string; path: string }): void {
+    setRepoPaths((current) => ({ ...current, [folder.repoId]: folder.path }));
+    setHiddenProjects((current) => {
+      if (!current.includes(folder.repoId)) return current;
+      const next = current.filter((id) => id !== folder.repoId);
+      saveIdList(HIDDEN_PROJECTS_KEY, next);
+      return next;
+    });
+    setOpenedFolders((current) => {
+      const next = [
+        { repoId: folder.repoId, path: folder.path },
+        ...current.filter((f) => f.repoId !== folder.repoId),
+      ];
+      saveOpenedFolders(next);
+      return next;
+    });
+  }
+
+  function onTerminalTitle(tabId: string, title: string): void {
+    terminalTitles.current[tabId] = title;
+    setTerminalAgents((current) => {
+      const prev = current[tabId];
+      if (prev == null) return current;
+      const next = withTitle(prev, title, Date.now());
+      return next === prev || next == null ? current : { ...current, [tabId]: next };
+    });
+  }
+
+  function projectPath(repoId: string): string | null {
+    return (
+      repoPaths[repoId] ??
+      openedFolders.find((f) => f.repoId === repoId)?.path ??
+      (repo?.repoId === repoId ? repo.path : null)
+    );
+  }
+
+  function projectActions(repoId: string): ProjectActions {
+    const path = projectPath(repoId);
+    return {
+      onNewTerminal: () => {
+        if (path == null) return;
+        openTerminal({ repoId, repoPath: path }, shells[0]?.kind ?? 'default');
+      },
+      onOpenIn: (target) => {
+        if (path == null) return;
+        const opener = window.osade?.openFolderIn;
+        if (!opener) {
+          setActionError('Opening folders needs the desktop app');
+          return;
+        }
+        opener(path, target).catch((err: Error) => setActionError(err.message));
+      },
+      onCopyPath: () => {
+        if (path == null) return;
+        navigator.clipboard.writeText(path).catch((err: Error) => setActionError(err.message));
+      },
+      onTogglePin: () =>
+        setPinnedProjects((current) => {
+          const next = current.includes(repoId) ? current.filter((id) => id !== repoId) : [repoId, ...current];
+          saveIdList(PINNED_PROJECTS_KEY, next);
+          return next;
+        }),
+      onRemove: () => {
+        setOpenedFolders((current) => {
+          const next = current.filter((f) => f.repoId !== repoId);
+          saveOpenedFolders(next);
+          return next;
+        });
+        setHiddenProjects((current) => {
+          const next = current.includes(repoId) ? current : [...current, repoId];
+          saveIdList(HIDDEN_PROJECTS_KEY, next);
+          return next;
+        });
+      },
+    };
+  }
+
   async function openFolder(): Promise<void> {
     let picked: OpenRepo | null;
     try {
@@ -444,9 +620,8 @@ export function App(): JSX.Element {
       return;
     }
     if (!picked) return;
-    const opened = picked;
-    setRepoPaths((current) => ({ ...current, [opened.repoId]: opened.path }));
-    await openDraftTab({ repoId: opened.repoId, path: opened.path });
+    rememberFolder(picked);
+    await openDraftTab({ repoId: picked.repoId, path: picked.path });
   }
 
   function onPanelPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -549,7 +724,7 @@ export function App(): JSX.Element {
       if (!picked) return;
       repoId = picked.repoId;
       repoPath = picked.path;
-      setRepoPaths((current) => ({ ...current, [picked.repoId]: picked.path }));
+      rememberFolder(picked);
     }
 
     setAgentModal({ repoId, repoPath, isolate: from?.isolate, checkoutRef: from?.checkoutRef, baseRef: from?.baseRef });
@@ -581,7 +756,7 @@ export function App(): JSX.Element {
       const picked = await pickRepo();
       if (!picked) return;
       repoPath = picked.path;
-      setRepoPaths((current) => ({ ...current, [picked.repoId]: picked.path }));
+      rememberFolder(picked);
     }
     const created = await api.orchestratorOpen(repoPath, defaultAgent ?? undefined);
     const task = chats.find((t) => t.task.id === created.taskId);
@@ -618,6 +793,12 @@ export function App(): JSX.Element {
     if (tabs.some((t) => t.id === id && t.kind === 'terminal')) {
       void api.terminalClose(id).catch(() => undefined);
     }
+    delete terminalTitles.current[id];
+    setTerminalAgents((current) => {
+      if (!(id in current)) return current;
+      const { [id]: _closed, ...rest } = current;
+      return rest;
+    });
     setTabs((current) => {
       const next = current.filter((t) => t.id !== id);
       setActiveId((active) => {
@@ -973,16 +1154,39 @@ export function App(): JSX.Element {
     );
   }
 
-  const projects: ProjectGroup[] = byRepo.map((group) => ({
-    repoId: group.repoId,
-    label: repoLabel(group.repoId, repo, group.chats[0]?.lanes[0]?.cwd ?? null, aliases),
-    chats: group.chats,
-  }));
-  if (repo && !projects.some((project) => project.repoId === repo.repoId)) {
-    projects.unshift({ repoId: repo.repoId, label: repoLabel(repo.repoId, repo, null, aliases), chats: [] });
+  const terminalRows = (repoId: string): TerminalAgentRow[] =>
+    tabs.flatMap((tab) => {
+      const agent = tab.kind === 'terminal' && tab.repoId === repoId ? terminalAgents[tab.id] : undefined;
+      return agent ? [{ tabId: tab.id, ...agent }] : [];
+    });
+  const project = (repoId: string, label: string, chats: ChatGroup[]): ProjectGroup => ({
+    repoId,
+    label,
+    chats,
+    terminals: terminalRows(repoId),
+    path: projectPath(repoId),
+    pinned: pinnedProjects.includes(repoId),
+  });
+  const listed: ProjectGroup[] = byRepo.map((group) =>
+    project(group.repoId, repoLabel(group.repoId, repo, group.chats[0]?.lanes[0]?.cwd ?? null, aliases), group.chats),
+  );
+  for (const folder of [...openedFolders].reverse()) {
+    if (listed.some((p) => p.repoId === folder.repoId)) continue;
+    listed.unshift(project(folder.repoId, repoLabel(folder.repoId, repo, folder.path, aliases), []));
   }
+  if (repo && !listed.some((p) => p.repoId === repo.repoId)) {
+    listed.unshift(project(repo.repoId, repoLabel(repo.repoId, repo, null, aliases), []));
+  }
+  // Pinned first, most recently pinned on top; the rest keep their order.
+  const visible = listed.filter((p) => !hiddenProjects.includes(p.repoId));
+  const projects = [
+    ...pinnedProjects.flatMap((id) => visible.filter((p) => p.repoId === id)),
+    ...visible.filter((p) => !p.pinned),
+  ];
   const detailShown =
     showDetail && activeTab?.kind === 'chat' && selectedChat != null && selected != null;
+  const terminalPanelShown =
+    view === 'list' && showDetail && activeTab?.kind === 'terminal' && activeTab.repoId != null;
   const resizing = sidebarDrag || browserDrag || panelDrag;
 
   return (
@@ -1020,6 +1224,8 @@ export function App(): JSX.Element {
       {sidebarOpen && (
         <ProjectSidebar
           projects={projects}
+          editors={editors}
+          projectActions={projectActions}
           selectedChatId={selectedChat?.chatId ?? null}
           collapsed={collapsed}
           onToggle={(key) =>
@@ -1055,6 +1261,12 @@ export function App(): JSX.Element {
           onBack={() => goHistory(-1)}
           onForward={() => goHistory(1)}
           onOpenChat={(chat) => openLane(primaryLane(chat))}
+          activeTabId={activeId}
+          onOpenTerminal={(tabId) => {
+            setView('list');
+            setActiveId(tabId);
+          }}
+          onTerminalMenu={(id, x, y) => setMenu({ id, x, y, kind: 'terminal' })}
           onMenu={(id, x, y) => setMenu({ id, x, y })}
           onNewChat={(repoId) =>
             void openDraftTab({
@@ -1104,6 +1316,7 @@ export function App(): JSX.Element {
         <TabStrip
           tabs={tabs}
           groups={groups}
+          terminalAgents={terminalAgents}
           activeId={activeId}
           sidebarHidden={!sidebarOpen}
           onShowSidebar={() => setSidebarOpen(true)}
@@ -1139,9 +1352,21 @@ export function App(): JSX.Element {
                   cwd={tab.cwd}
                   shell={tab.shell}
                   visible={showDetail && activeTab?.id === tab.id}
+                  onTitle={(title) => onTerminalTitle(tab.id, title)}
                 />
               </div>
             ) : null,
+          )}
+          {view === 'list' && showDetail && activeTab?.kind === 'terminal' && activeTab.repoId != null && (
+            <TerminalWorkspace
+              key={activeTab.id}
+              repoId={activeTab.repoId}
+              panel={panel}
+              onPanel={openPanel}
+              panelHost={panelOpen ? panelHost : null}
+              notesVersion={notesVersion}
+              onCaptureNote={openCapture}
+            />
           )}
           {view === 'board' ? (
             <Board
@@ -1308,10 +1533,10 @@ export function App(): JSX.Element {
           />
           {/* The open chat portals its Files, Checks, Changes, Rules and Notes in here. */}
           <aside className="right-panel" ref={setPanelHost}>
-            {!detailShown && (
+            {!detailShown && !terminalPanelShown && (
               <>
                 <PanelTabs panel={panel} onPanel={setPanel} disabled />
-                <p className="right-panel-empty">Open a chat to see its files, checks and changes.</p>
+                <p className="right-panel-empty">Open a chat or a project terminal to see its files and changes.</p>
               </>
             )}
           </aside>
@@ -1358,7 +1583,22 @@ export function App(): JSX.Element {
         onError={setActionError}
       />
 
-      {menu && (
+      {menu?.kind === 'terminal' && (
+        <RowMenu
+          x={menu.x}
+          y={menu.y}
+          label="Delete terminal"
+          onClose={() => setMenu(null)}
+          onDelete={() => {
+            const id = menu.id;
+            setMenu(null);
+            // Ends the shell and whatever runs in it, and forgets its saved output.
+            closeTab(id);
+          }}
+        />
+      )}
+
+      {menu && menu.kind !== 'terminal' && (
         <RowMenu
           x={menu.x}
           y={menu.y}
@@ -1418,6 +1658,7 @@ export function App(): JSX.Element {
 function TabStrip({
   tabs,
   groups,
+  terminalAgents,
   activeId,
   sidebarHidden,
   onShowSidebar,
@@ -1430,6 +1671,7 @@ function TabStrip({
 }: {
   tabs: Tab[];
   groups: ChatGroup[];
+  terminalAgents: Record<string, TerminalAgent>;
   activeId: string | null;
   sidebarHidden?: boolean;
   onShowSidebar?: () => void;
@@ -1459,11 +1701,22 @@ function TabStrip({
       )}
       {tabs.map((tab) => {
         const chat = tab.kind === 'chat' ? groups.find((g) => g.chatId === tab.id) : null;
+        const termAgent = tab.kind === 'terminal' ? terminalAgents[tab.id] : undefined;
         const title =
-          tab.kind === 'draft' ? 'New chat' : tab.kind === 'terminal' ? tab.title : (chat?.title ?? 'Chat');
+          tab.kind === 'draft'
+            ? 'New chat'
+            : tab.kind === 'terminal'
+              ? (termAgent?.label ?? tab.title)
+              : (chat?.title ?? 'Chat');
         const agentId =
           tab.kind === 'draft' ? tab.agentId : chat ? primaryLane(chat).agentId : null;
-        const tone = chat ? STATUS[chat.status].tone : tab.kind === 'draft' ? 'needs' : 'rest';
+        const tone = chat
+          ? STATUS[chat.status].tone
+          : termAgent
+            ? terminalAgentTone(termAgent.status)
+            : tab.kind === 'draft'
+              ? 'needs'
+              : 'rest';
         const active = tab.id === activeId;
         return (
           <button
@@ -1474,7 +1727,9 @@ function TabStrip({
             className="osade-tab"
             onClick={() => onSelect(tab.id)}
           >
-            {tab.kind === 'terminal' ? (
+            {termAgent ? (
+              <AgentMark name={termAgent.agent} size={14} />
+            ) : tab.kind === 'terminal' ? (
               <ShellIcon shell={tab.shell} size={14} />
             ) : agentId ? (
               <AgentMark name={agentId} size={14} />
@@ -1545,11 +1800,13 @@ function TabStrip({
 function RowMenu({
   x,
   y,
+  label = 'Delete',
   onClose,
   onDelete,
 }: {
   x: number;
   y: number;
+  label?: string;
   onClose: () => void;
   onDelete: () => void;
 }): JSX.Element {
@@ -1589,7 +1846,7 @@ function RowMenu({
             padding: '6px 12px',
           }}
         >
-          Delete
+          {label}
         </button>
       </div>
     </div>
@@ -1676,6 +1933,96 @@ function folderFromWorktree(path: string): string | null {
   const last = parts[parts.length - 1] ?? '';
   if (last.startsWith('t_')) return parts[parts.length - 2] ?? null;
   return last;
+}
+
+interface OpenedFolder {
+  repoId: string;
+  path: string;
+}
+
+function loadOpenedFolders(): OpenedFolder[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(OPENED_FOLDERS_KEY) ?? '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (f): f is OpenedFolder =>
+        typeof f === 'object' && f != null && typeof f.repoId === 'string' && typeof f.path === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+const SHELL_KINDS: readonly ShellKind[] = ['default', 'powershell', 'cmd', 'gitbash'];
+
+function loadTerminalTabs(): { tabs: TerminalTab[]; activeId: string | null } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TERMINAL_TABS_KEY) ?? 'null') as {
+      tabs?: unknown;
+      activeId?: unknown;
+    } | null;
+    const tabs = (Array.isArray(raw?.tabs) ? raw.tabs : []).flatMap((t: unknown): TerminalTab[] => {
+      const tab = t as Partial<TerminalTab> | null;
+      if (
+        tab == null ||
+        typeof tab.id !== 'string' ||
+        typeof tab.cwd !== 'string' ||
+        typeof tab.title !== 'string' ||
+        !SHELL_KINDS.includes(tab.shell as ShellKind)
+      ) {
+        return [];
+      }
+      return [
+        {
+          kind: 'terminal',
+          id: tab.id,
+          repoId: typeof tab.repoId === 'string' ? tab.repoId : null,
+          cwd: tab.cwd,
+          shell: tab.shell as ShellKind,
+          title: tab.title,
+        },
+      ];
+    });
+    const activeId =
+      typeof raw?.activeId === 'string' && tabs.some((t) => t.id === raw.activeId) ? raw.activeId : null;
+    return { tabs, activeId };
+  } catch {
+    return { tabs: [], activeId: null };
+  }
+}
+
+function saveTerminalTabs(tabs: TerminalTab[], activeId: string | null): void {
+  try {
+    const active = tabs.some((t) => t.id === activeId) ? activeId : null;
+    localStorage.setItem(TERMINAL_TABS_KEY, JSON.stringify({ tabs, activeId: active }));
+  } catch {
+    // localStorage can throw in a private session.
+  }
+}
+
+function loadIdList(key: string): string[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveIdList(key: string, ids: string[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(ids));
+  } catch {
+    // localStorage can throw in a private session.
+  }
+}
+
+function saveOpenedFolders(folders: OpenedFolder[]): void {
+  try {
+    localStorage.setItem(OPENED_FOLDERS_KEY, JSON.stringify(folders));
+  } catch {
+    // localStorage can throw in a private session.
+  }
 }
 
 function loadSidebarWidth(): number {

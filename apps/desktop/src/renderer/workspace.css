@@ -1529,3 +1529,106 @@
 .gate-stack > div + div {
   margin-top: 14px;
 }
+
+/* Right-click menu on a sidebar project, after Orca's workspace menu. */
+.project-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.project-menu {
+  position: fixed;
+  min-width: 220px;
+  padding: 5px;
+  background: var(--bg-2);
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  font-size: var(--t-s);
+}
+
+.project-menu hr {
+  margin: 4px 2px;
+  border: none;
+  border-top: 0.5px solid var(--line);
+}
+
+.project-menu-label {
+  padding: 5px 8px 4px;
+  color: var(--ink-3);
+  font-size: var(--t-xs);
+}
+
+.project-menu-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--ink);
+  text-align: left;
+  cursor: default;
+}
+
+.project-menu-item svg {
+  width: 15px;
+  height: 15px;
+  color: var(--ink-2);
+}
+
+.project-menu-item:hover:not(:disabled),
+.project-menu-item:focus-visible {
+  background: var(--bg-3);
+  outline: none;
+}
+
+.project-menu-item:disabled {
+  color: var(--ink-3);
+}
+
+.project-menu-item[data-danger],
+.project-menu-item[data-danger] svg {
+  color: var(--st-fail);
+}
+
+.project-menu-sub {
+  position: relative;
+}
+
+.project-menu-flyout {
+  position: absolute;
+  top: -5px;
+  left: calc(100% + 4px);
+  min-width: 160px;
+}
+
+.project-menu-flyout .project-menu-item {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+  gap: 4px;
+}
+
+.project-row[data-menu-open] .project-toggle {
+  background: var(--bg-3);
+}
+
+.project-toggle svg.project-pin {
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+}
+
+/* A file or diff opened from a terminal tab's panel, over the (still running) terminal. */
+.terminal-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-0);
+}

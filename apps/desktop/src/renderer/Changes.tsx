@@ -13,6 +13,7 @@ import { hunkAttach, type ComposerAttach } from './compose-attach.js';
 import { composeAppend } from './compose-event.js';
 import { flagColour, parseUnified } from './highlight.js';
 import { PrOpen } from './PrOpen.js';
+import type { WorkTarget } from './work-target.js';
 
 type Flag = 'M' | 'A' | 'D' | '?';
 
@@ -35,13 +36,16 @@ interface Pick {
  * `viewerHost`, a slot in the centre column.
  */
 export function Changes({
+  target,
   task,
   lanes,
   onAttach,
   viewerHost,
   onShow,
 }: {
-  task: TaskView;
+  target: WorkTarget;
+  /** The lane, when there is one: its pull request section. A terminal tab's folder has none. */
+  task?: TaskView;
   lanes?: TaskView[];
   onAttach?: (attach: ComposerAttach | null) => void;
   /** The centre column's slot for the diff. Nothing renders there until it exists. */
@@ -60,14 +64,14 @@ export function Changes({
   const [marked, setMarked] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
-  const stamp = `${task.task.id}:${task.cwd}:${task.agent?.last_event_at ?? 0}:${task.status}`;
+  const stamp = target.stamp;
 
   useEffect(() => {
     let cancelled = false;
 
     async function refresh(): Promise<void> {
       try {
-        const next = await api.taskChangesList(task.task.id);
+        const next = await api.taskChangesList(target.source);
         if (cancelled) return;
         setFiles(next.files);
         setOutgoing(next.outgoing);
@@ -89,7 +93,7 @@ export function Changes({
       cancelled = true;
       window.clearInterval(tick);
     };
-  }, [stamp, task.task.id]);
+  }, [stamp, target.key]);
 
   useEffect(() => {
     if (picked == null) {
@@ -98,7 +102,7 @@ export function Changes({
     }
     let cancelled = false;
     void api
-      .taskChangesDiff(task.task.id, picked.path, picked.vs)
+      .taskChangesDiff(target.source, picked.path, picked.vs)
       .then((next) => {
         if (!cancelled) setDiff(next.diff);
       })
@@ -108,7 +112,7 @@ export function Changes({
     return () => {
       cancelled = true;
     };
-  }, [picked, stamp, task.task.id]);
+  }, [picked, stamp, target.key]);
 
   useEffect(() => {
     setMarked(new Set());
@@ -279,27 +283,29 @@ export function Changes({
             viewerHost,
           )}
       </div>
-      <div
-        style={{
-          flexShrink: 0,
-          maxHeight: 220,
-          overflow: 'auto',
-          borderTop: '0.5px solid var(--line)',
-          padding: '10px 16px 14px',
-        }}
-      >
-        <details>
-          <summary style={{ cursor: 'default', fontSize: 'var(--t-s)' }}>Open pull request</summary>
-          <div style={{ marginTop: 10 }}>
-            <PrOpen task={task} lanes={lanes} />
-          </div>
-        </details>
-        {task.scm?.pr_url && (
-          <p className="mono" style={{ margin: '8px 0 0', fontSize: 'var(--t-xs)', color: 'var(--ink-2)' }}>
-            {task.scm.pr_url}
-          </p>
-        )}
-      </div>
+      {task && (
+        <div
+          style={{
+            flexShrink: 0,
+            maxHeight: 220,
+            overflow: 'auto',
+            borderTop: '0.5px solid var(--line)',
+            padding: '10px 16px 14px',
+          }}
+        >
+          <details>
+            <summary style={{ cursor: 'default', fontSize: 'var(--t-s)' }}>Open pull request</summary>
+            <div style={{ marginTop: 10 }}>
+              <PrOpen task={task} lanes={lanes} />
+            </div>
+          </details>
+          {task.scm?.pr_url && (
+            <p className="mono" style={{ margin: '8px 0 0', fontSize: 'var(--t-xs)', color: 'var(--ink-2)' }}>
+              {task.scm.pr_url}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

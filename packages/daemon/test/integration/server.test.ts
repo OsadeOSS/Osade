@@ -271,3 +271,51 @@ describe('websocket — §5.4, one event path', () => {
     socket.close();
   });
 });
+
+describe('Files and Changes for a project folder (terminal tabs)', () => {
+  it('lists, reads, writes and diffs the repo checkout by repoId', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { writeFileSync } = await import('node:fs');
+    const repo = mkdtempSync(join(tmpdir(), 'osade-repo-'));
+    const git = (...args: string[]): void => {
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: repo, stdio: 'ignore' });
+    };
+    try {
+      git('init', '-q', '-b', 'main');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      git('add', '.');
+      git('commit', '-q', '-m', 'init');
+      writeFileSync(join(repo, 'a.txt'), 'one\ntwo\n');
+      writeFileSync(join(repo, 'new.txt'), 'fresh\n');
+
+      db.prepare('INSERT INTO org (id, name, created_at) VALUES (?,?,?)').run('o1', 'acme', NOW);
+      db.prepare(
+        'INSERT INTO repo (id, org_id, path, default_branch, created_at) VALUES (?,?,?,?,?)',
+      ).run('rp', 'o1', repo, 'main', NOW);
+
+      const changes = (await trpcQuery('taskChangesList', { repoId: 'rp' })) as {
+        files: { path: string; flag: string }[];
+      };
+      expect(changes.files.map((f) => `${f.flag} ${f.path}`).sort()).toEqual(['? new.txt', 'M a.txt']);
+
+      const diff = (await trpcQuery('taskChangesDiff', { repoId: 'rp', path: 'a.txt', vs: 'working' })) as {
+        diff: string;
+      };
+      expect(diff.diff).toContain('+two');
+
+      const listed = (await trpcQuery('taskFsList', { repoId: 'rp' })) as {
+        listings: { entries: { name: string }[] }[];
+      };
+      expect(listed.listings[0]!.entries.map((e) => e.name)).toEqual(expect.arrayContaining(['a.txt', 'new.txt']));
+
+      await trpcMutation('taskFsWrite', { repoId: 'rp', path: 'new.txt', text: 'edited\n' });
+      const read = (await trpcQuery('taskFsRead', { repoId: 'rp', path: 'new.txt' })) as { text: string };
+      expect(read.text).toBe('edited\n');
+
+      await expect(trpcQuery('taskChangesList', {})).rejects.toThrow(/taskId or repoId/);
+      await expect(trpcQuery('taskChangesList', { repoId: 'nope' })).rejects.toThrow(/unknown repo/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});

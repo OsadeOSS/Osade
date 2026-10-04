@@ -23,6 +23,8 @@ declare global {
       openInSubstrate(): Promise<{ command: string; hint: string }>;
       openedRepo(): Promise<string | null>;
       chooseRepository(defaultPath?: string): Promise<string | null>;
+      editors(): Promise<{ id: string; label: string }[]>;
+      openFolderIn(folder: string, target: string): Promise<void>;
       zoom(delta: 1 | -1): Promise<number>;
       onRepoOpened(handler: (path: string) => void): () => void;
       githubStatus(): Promise<{ signedIn: boolean; login: string | null }>;

@@ -1,16 +1,38 @@
-import { type JSX, type ReactNode } from 'react';
+import { useState, type JSX, type ReactNode } from 'react';
 
 import { AgentMark } from './agent-icon.js';
 import osadeLogo from './assets/osade.png';
 import { chord } from './chords.js';
 import { chatActivity, chatLabel, primaryLane, type ChatGroup } from './lanes.js';
-import { STATUS, TONE_COLOUR, ago } from './status.js';
+import { ProjectMenu, type ProjectMenuActions } from './ProjectMenu.js';
+import { STATUS, TONE_COLOUR, ago, type Tone } from './status.js';
+import { TERMINAL_STATUS_LABEL, type TerminalAgent, type TerminalAgentStatus } from './terminal-agent.js';
+
+/** An agent someone started by hand in a terminal tab. */
+export interface TerminalAgentRow extends TerminalAgent {
+  tabId: string;
+}
 
 export interface ProjectGroup {
   repoId: string;
   label: string;
   chats: ChatGroup[];
+  terminals: TerminalAgentRow[];
+  /** The folder on disk, when known. */
+  path: string | null;
+  pinned: boolean;
 }
+
+/** The project menu's actions that need App state; rename, fold and new session are local. */
+export type ProjectActions = Omit<ProjectMenuActions, 'onRename' | 'onToggleCollapse' | 'onNewSession'>;
+
+/** Working pulses; a finished turn waits on you, like a chat that needs a reply. */
+export function terminalAgentTone(status: TerminalAgentStatus): Tone {
+  if (status === 'working') return 'live';
+  if (status === 'done') return 'needs';
+  return 'rest';
+}
+
 
 interface BranchGroup {
   branch: string;
@@ -67,9 +89,14 @@ export function ProjectSidebar({
   onBack,
   onForward,
   onOpenChat,
+  activeTabId,
+  onOpenTerminal,
+  onTerminalMenu,
   onMenu,
   onNewChat,
   onOpenFolder,
+  editors,
+  projectActions,
   error,
   settings,
 }: {
@@ -95,12 +122,20 @@ export function ProjectSidebar({
   onBack: () => void;
   onForward: () => void;
   onOpenChat: (chat: ChatGroup) => void;
+  activeTabId: string | null;
+  onOpenTerminal: (tabId: string) => void;
+  /** Right-click on a terminal row: its tab's menu. */
+  onTerminalMenu: (tabId: string, x: number, y: number) => void;
   onMenu: (taskId: string, x: number, y: number) => void;
   onNewChat: (repoId: string) => void;
   onOpenFolder: () => void;
+  editors: { id: string; label: string }[];
+  projectActions: (repoId: string) => ProjectActions;
   error: string | null;
   settings: ReactNode;
 }): JSX.Element {
+  const [menu, setMenu] = useState<{ repoId: string; x: number; y: number } | null>(null);
+  const menuProject = menu ? projects.find((p) => p.repoId === menu.repoId) : undefined;
   return (
     <main className="osade-sidebar side">
       <div className="side-top">
@@ -173,7 +208,15 @@ export function ProjectSidebar({
           const closed = collapsed.has(project.repoId);
           return (
             <section key={project.repoId} className="project">
-              <div className="project-row">
+              <div
+                className="project-row"
+                data-menu-open={menu?.repoId === project.repoId || undefined}
+                onContextMenu={(event) => {
+                  if (renaming === project.repoId) return;
+                  event.preventDefault();
+                  setMenu({ repoId: project.repoId, x: event.clientX, y: event.clientY });
+                }}
+              >
                 <button
                   type="button"
                   className="project-toggle"
@@ -208,13 +251,8 @@ export function ProjectSidebar({
                   ) : (
                     <span
                       className="project-name"
-                      title="Double-click or right-click to rename"
+                      title={`${project.path ?? project.label} — right-click for options, double-click to rename`}
                       onDoubleClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onRename(project.repoId);
-                      }}
-                      onContextMenu={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
                         onRename(project.repoId);
@@ -222,6 +260,11 @@ export function ProjectSidebar({
                     >
                       {project.label}
                     </span>
+                  )}
+                  {project.pinned && (
+                    <svg className="project-pin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-label="Pinned">
+                      <path d="M6 2.5h4M8 2.5v5l3 2.5H5l3-2.5M8 10v3.5" />
+                    </svg>
                   )}
                 </button>
                 <IconButton label="New session" onClick={() => onNewChat(project.repoId)} className="project-add">
@@ -274,12 +317,59 @@ export function ProjectSidebar({
                     </div>
                   );
                 })}
+
+              {!closed && project.terminals.length > 0 && (
+                <div
+                  className="branch-card"
+                  data-active={project.terminals.some((t) => t.tabId === activeTabId) || undefined}
+                >
+                  <div className="branch-card-head">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+                      <path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3" />
+                    </svg>
+                    <span className="branch-card-name">Terminal</span>
+                  </div>
+                  <div className="branch-card-count" aria-hidden="true">
+                    <span>
+                      {project.terminals.length} {project.terminals.length === 1 ? 'agent' : 'agents'}
+                    </span>
+                  </div>
+                  {project.terminals.map((row) => (
+                    <TerminalRow
+                      key={row.tabId}
+                      row={row}
+                      selected={row.tabId === activeTabId}
+                      onSelect={() => onOpenTerminal(row.tabId)}
+                      onMenu={(x, y) => onTerminalMenu(row.tabId, x, y)}
+                    />
+                  ))}
+                </div>
+              )}
             </section>
           );
         })}
       </div>
 
       <footer className="side-foot">{settings}</footer>
+
+      {menu && menuProject && (
+        <ProjectMenu
+          x={menu.x}
+          y={menu.y}
+          pinned={menuProject.pinned}
+          collapsed={collapsed.has(menuProject.repoId)}
+          hasPath={menuProject.path != null}
+          editors={editors}
+          onClose={() => setMenu(null)}
+          actions={{
+            ...projectActions(menuProject.repoId),
+            onNewSession: () => onNewChat(menuProject.repoId),
+            onRename: () => onRename(menuProject.repoId),
+            onToggleCollapse: () => onToggle(menuProject.repoId),
+          }}
+        />
+      )}
     </main>
   );
 }
@@ -328,6 +418,54 @@ function SessionRow({
       </span>
       <span className="session-row-title">{chatLabel(chat)}</span>
       {age && <span className="session-row-age">{age}</span>}
+    </div>
+  );
+}
+
+function TerminalRow({
+  row,
+  selected,
+  onSelect,
+  onMenu,
+}: {
+  row: TerminalAgentRow;
+  selected: boolean;
+  onSelect: () => void;
+  onMenu: (x: number, y: number) => void;
+}): JSX.Element {
+  const tone = terminalAgentTone(row.status);
+  const status = TERMINAL_STATUS_LABEL[row.status];
+  const name = row.name;
+  const text = row.label === name ? `${status} - ${name}` : row.label;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      className="session-row"
+      title={`${row.label} — ${name} in a terminal, ${status.toLowerCase()}`}
+      onClick={onSelect}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onMenu(event.clientX, event.clientY);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <span
+        className={`session-row-status ${tone === 'live' ? 'dock-status-live' : ''}`}
+        style={{ background: TONE_COLOUR[tone] }}
+        aria-hidden="true"
+      />
+      <span className="session-row-agent" aria-hidden="true">
+        <AgentMark name={row.agent} size={13} />
+      </span>
+      <span className="session-row-title">{text}</span>
+      <span className="session-row-age">{ago(row.since)}</span>
     </div>
   );
 }

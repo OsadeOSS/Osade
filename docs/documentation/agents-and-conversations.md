@@ -30,8 +30,23 @@ its own tab. It is not attached to any agent or chat.
 - On macOS and Linux the menu offers one terminal running your `$SHELL`.
 
 The shell keeps running while you switch to other tabs, and its scrollback stays in the tab.
-Closing the tab (`Ctrl+W` / `Cmd+W`, or its ×) ends the shell. Terminal tabs are not restored
-when Osade restarts.
+Closing the tab (`Ctrl+W` / `Cmd+W`, or its ×) ends the shell and discards its saved output.
+
+### Terminal tabs persist
+
+Terminal tabs come back when you reopen Osade, in the same order, with the same tab selected.
+Shells run in the Osade daemon, which keeps running after the window closes. So closing the window
+does not stop a terminal or anything running in it, such as an agent mid-task. When the window
+opens again, each tab reconnects to its shell and shows its recent output (about the last 256 KB).
+
+If the daemon itself stopped, for example after a reboot or an Osade update, the shell is gone. The
+tab still comes back: it shows the output saved before the daemon stopped, a line saying Osade
+restarted, and a fresh shell in the same folder. Output is saved to `~/.osade/terminals/` about
+once a second while a terminal is busy. A crash can lose the last second, but a normal shutdown
+saves everything.
+
+Open tabs are remembered on this computer. If a terminal's folder no longer exists, the
+reopened tab shows the error instead of a shell.
 
 ### Terminal behaviour
 
@@ -46,6 +61,39 @@ Terminal tabs and a lane's **Terminal** view use the same emulator:
   its shell is still running, the terminal shows that shell's most recent output again (about the
   last 256 KB) instead of opening blank.
 - `Ctrl+C` copies when text is selected and otherwise interrupts. `Ctrl+V` pastes.
+
+### Agents started in a terminal tab
+
+If you start a coding agent yourself in a terminal tab, Osade notices it and lists it in the
+sidebar under the project, in a **Terminal** card. Clicking the row switches to that tab, and the
+tab itself shows the agent's icon and topic in place of the shell's name.
+
+Osade finds the agent by checking the processes running under the tab's shell about every two
+seconds, so detection does not depend on the agent cooperating. It recognises Claude Code, Codex,
+Gemini, Antigravity (`agy`), OpenCode, Cline, Kiro (`kiro-cli`), Freebuff, Codebuff, Aider,
+Goose, Amp, Kilo Code, Crush, Auggie, GitHub Copilot, Cursor (`cursor-agent`), Droid, Qwen Code,
+Kimi, Mistral Vibe, Continue (`cn`), Hermes, OpenClaw, Grok, Devin, Qoder, CodeBuddy, OpenClaude,
+Pi, Trae, Autohand, Command Code, MiMo Code, ZCode, and Jcode. They are recognised:
+
+- by executable name (`claude.exe`, `kiro-cli`, platform builds such as `codex-x86_64-…`);
+- or, for agents installed as Node or Python packages, by the script being run
+  (`node …/node_modules/cline/…`, `python -m aider`).
+
+The row leaves the sidebar when the agent process exits.
+
+Each row shows one of three states:
+
+- **Running**: the agent is open. Agents that do not report their state stay here.
+- **Working** (pulsing): the agent is busy.
+- **Done**: it finished a turn, or is asking for permission, and is waiting for you.
+
+**Working** and **Done** come from the window title the agent sets. Claude Code (`✳` and spinner
+titles) and Gemini (`✦`, `◇`, `✋`) report them, and so does any agent that puts a spinner glyph
+in front of its title. If the agent writes a topic into the title, the row shows that topic.
+
+These agents are not chats: Osade does not record their conversation, and the rows disappear
+when the tab closes. Only terminal tabs are checked, not a lane's **Terminal** view. An agent
+running on another machine over `ssh` is not detected.
 
 ## Run multiple agents in one conversation
 
@@ -80,8 +128,8 @@ The composer remains available while an agent is working. Sending during a live 
 follow-up until that lane is ready instead of interrupting the terminal input. The transcript
 marks held and failed deliveries.
 
-Switch the Chat surface to **Terminal** when you need the live terminal session. Switching back to
-Chat returns to the durable conversation rather than treating terminal output as chat history.
+A conversation shows only the chat. To work in a terminal, open a terminal tab for the project
+(see [Terminal tabs](#terminal-tabs)); terminal output never becomes chat history.
 
 ## Add images
 

@@ -28,7 +28,7 @@ Additional chats and additional agents in one conversation use isolated Git work
 needed. Each lane gets its own branch and working directory, so two agents do not write to the
 same tree.
 
-The branch menu, at the right of the Chat/Terminal switch above the conversation, identifies
+The branch menu, at the right of the bar above the conversation, identifies
 worktree lanes and provides:
 
 - **Use a worktree** for an attached checkout;

@@ -64,7 +64,7 @@ export async function startDaemonServer(options: DaemonServerOptions): Promise<R
   const { db, launcher } = options;
   const now = options.now ?? Date.now;
   const onWarning = options.onWarning ?? (() => {});
-  const shells = new TaskShells();
+  const shells = new TaskShells({ historyDir: osadePaths().terminalsDir });
 
   const broadcaster = new CdcBroadcaster(db, { now, onWarning });
   broadcaster.start();

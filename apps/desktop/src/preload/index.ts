@@ -45,6 +45,13 @@ contextBridge.exposeInMainWorld('osade', {
   chooseRepository: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('osade:choose-repository', defaultPath),
 
+  /** Code editors installed on PATH, for the project menu's "Open in". */
+  editors: (): Promise<{ id: string; label: string }[]> => ipcRenderer.invoke('osade:editors'),
+
+  /** Open a project folder in the file manager (`files`) or an editor from `editors()`. */
+  openFolderIn: (folder: string, target: string): Promise<void> =>
+    ipcRenderer.invoke('osade:open-folder-in', folder, target),
+
   /**
    * VS Code zoom: +1 / −1 steps of 1.2×. Keyboard chords are handled in main;
    * the renderer only uses this for Ctrl+wheel.

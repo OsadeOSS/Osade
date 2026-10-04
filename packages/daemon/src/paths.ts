@@ -27,6 +27,8 @@ export interface OsadePaths {
   readonly reviewDir: string;
   readonly skillsDir: string;
   readonly worktreesDir: string;
+  /** Terminal tabs' recent output, so a tab reopened after the daemon restarts is not blank. */
+  readonly terminalsDir: string;
   readonly electronUserData: string;
   /** Where the daemon writes its port so the CLI and the Electron app can find it. */
   readonly portFile: string;
@@ -45,6 +47,7 @@ export function osadePaths(env: NodeJS.ProcessEnv = process.env): OsadePaths {
     reviewDir: join(root, 'review'),
     skillsDir: join(root, 'skills'),
     worktreesDir: join(root, 'worktrees'),
+    terminalsDir: join(root, 'terminals'),
     electronUserData: join(root, 'electron'),
     portFile: join(root, 'daemon.port'),
     pidFile: join(root, 'daemon.pid'),

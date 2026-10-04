@@ -15,6 +15,7 @@ import { Conventions } from './Conventions.js';
 import { lanePhase, type PendingLane } from './delivery.js';
 import { Files } from './Files.js';
 import { GateCard } from './GateCard.js';
+import { taskTarget } from './work-target.js';
 import { LaneTerminal } from './LaneTerminal.js';
 import { QuickNotes } from './QuickNotesPanel.js';
 import {
@@ -300,6 +301,9 @@ contextRepos?: ContextRepo[];
       )}
 
       <div className="center-switch">
+        {/*
+          The Chat / Terminal switch is retired: agents started by hand now run in terminal tabs.
+          Kept for reference; the lane terminal itself still works if this is restored.
         <FilterChip
           label="Chat"
           active={viewer == null && chatSurface === 'chat'}
@@ -310,6 +314,11 @@ contextRepos?: ContextRepo[];
           active={viewer == null && chatSurface === 'terminal'}
           onClick={() => showSurface('terminal')}
         />
+        */}
+        {/* With a file or diff open, Chat is the way back to the conversation. */}
+        {(opened.file || opened.diff) && (
+          <FilterChip label="Chat" active={viewer == null} onClick={() => showSurface('chat')} />
+        )}
         {opened.file && <FilterChip label="File" active={viewer === 'file'} onClick={showFile} />}
         {opened.diff && <FilterChip label="Diff" active={viewer === 'diff'} onClick={showDiff} />}
         <span style={{ marginLeft: 'auto' }}>
@@ -456,7 +465,7 @@ contextRepos?: ContextRepo[];
                 <div className="right-panel-pane" style={{ display: panel === 'files' ? 'flex' : 'none' }}>
                   <Files
                     key={focused.task.id}
-                    task={focused}
+                    target={taskTarget(focused)}
                     onAttach={viewer === 'file' ? setLaneAttach : undefined}
                     openPath={noteTarget}
                     onOpenChange={reportFile}
@@ -480,6 +489,7 @@ contextRepos?: ContextRepo[];
                 <div className="right-panel-pane" style={{ display: panel === 'diff' ? 'flex' : 'none' }}>
                   <Changes
                     key={focused.task.id}
+                    target={taskTarget(focused)}
                     task={focused}
                     lanes={chat.lanes}
                     onAttach={viewer === 'diff' ? setLaneAttach : undefined}

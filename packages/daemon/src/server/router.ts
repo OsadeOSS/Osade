@@ -127,6 +127,26 @@ function locateTaskCwd(ctx: DaemonContext, taskId: string): { cwd: string; baseS
 }
 
 /**
+ * What the Files and Changes panels read: a lane's checkout (`taskId`), or a project's own
+ * folder (`repoId`) — the latter for a terminal tab, which has no task. A project's working
+ * changes are measured against HEAD; outgoing commits against its upstream, as for a lane.
+ */
+const WorkSource = { taskId: TaskId.optional(), repoId: z.string().min(1).optional() };
+
+function locateWork(
+  ctx: DaemonContext,
+  input: { taskId?: string; repoId?: string },
+): { cwd: string; baseSha: string; taskId: string | null } {
+  if (input.taskId) return { ...locateTaskCwd(ctx, input.taskId), taskId: input.taskId };
+  if (!input.repoId) throw new TRPCError({ code: 'BAD_REQUEST', message: 'taskId or repoId is required' });
+  const repo = ctx.db.prepare('SELECT path FROM repo WHERE id = ?').get(input.repoId) as
+    | { path: string }
+    | undefined;
+  if (!repo) throw new TRPCError({ code: 'NOT_FOUND', message: 'unknown repo' });
+  return { cwd: repo.path, baseSha: 'HEAD', taskId: null };
+}
+
+/**
  * §19.3 — the ledger sorts needs-you first, then live, then everything else. Never by creation
  * time by default: with eight agents running, "who needs me?" is the only question.
  */
@@ -397,6 +417,16 @@ export const appRouter = t.router({
     .output(z.object({ text: z.string() }))
     .query(({ ctx, input }) => ({ text: ctx.shells.read(`term:${input.id}`) })),
 
+  /** Agents running in open terminal tabs, by tab id — whatever the user launched there by hand. */
+  terminalAgents: t.procedure
+    .output(z.array(z.object({ id: z.string(), agent: z.string(), name: z.string() })))
+    .query(async ({ ctx }) => {
+      const found = await ctx.shells.agents().catch(() => new Map<string, { id: string; name: string }>());
+      return [...found]
+        .filter(([key]) => key.startsWith('term:'))
+        .map(([key, agent]) => ({ id: key.slice('term:'.length), agent: agent.id, name: agent.name }));
+    }),
+
   terminalWrite: t.procedure
     .input(z.object({ id: TerminalId, data: z.string().min(1) }))
     .output(z.object({ ok: z.literal(true) }))
@@ -432,7 +462,7 @@ export const appRouter = t.router({
     }),
 
   taskFsList: t.procedure
-    .input(z.object({ taskId: TaskId, dirs: z.array(z.string()).optional() }))
+    .input(z.object({ ...WorkSource, dirs: z.array(z.string()).optional() }))
     .output(
       z.object({
         cwd: z.string(),
@@ -454,7 +484,7 @@ export const appRouter = t.router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      const located = locateTaskCwd(ctx, input.taskId);
+      const located = locateWork(ctx, input);
       try {
         const changes = await fileChanges(located.cwd, located.baseSha);
         const dirs = input.dirs ?? [''];
@@ -468,7 +498,7 @@ export const appRouter = t.router({
     }),
 
   taskFsRead: t.procedure
-    .input(z.object({ taskId: TaskId, path: z.string().min(1) }))
+    .input(z.object({ ...WorkSource, path: z.string().min(1) }))
     .output(
       z.object({
         path: z.string(),
@@ -478,7 +508,7 @@ export const appRouter = t.router({
       }),
     )
     .query(({ ctx, input }) => {
-      const located = locateTaskCwd(ctx, input.taskId);
+      const located = locateWork(ctx, input);
       try {
         return readTaskFile(located.cwd, input.path);
       } catch (err) {
@@ -487,12 +517,13 @@ export const appRouter = t.router({
     }),
 
   taskFsWrite: t.procedure
-    .input(z.object({ taskId: TaskId, path: z.string().min(1), text: z.string() }))
+    .input(z.object({ ...WorkSource, path: z.string().min(1), text: z.string() }))
     .output(z.object({ path: z.string(), bytes: z.number().int() }))
     .mutation(({ ctx, input }) => {
-      const located = locateTaskCwd(ctx, input.taskId);
+      const located = locateWork(ctx, input);
       try {
-        assertWritablePath(ctx.db, input.taskId, safeResolve(located.cwd, input.path));
+        // Read-only context repos belong to a lane; a project's own folder is always writable.
+        if (located.taskId) assertWritablePath(ctx.db, located.taskId, safeResolve(located.cwd, input.path));
         return writeTaskFile(located.cwd, input.path, input.text);
       } catch (err) {
         if (err instanceof ContextReadOnlyError) {
@@ -503,7 +534,7 @@ export const appRouter = t.router({
     }),
 
   taskChangesList: t.procedure
-    .input(z.object({ taskId: TaskId }))
+    .input(z.object(WorkSource))
     .output(
       z.object({
         files: z.array(
@@ -531,7 +562,7 @@ export const appRouter = t.router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      const located = locateTaskCwd(ctx, input.taskId);
+      const located = locateWork(ctx, input);
       try {
         return await listWorkingChanges(located.cwd, located.baseSha);
       } catch (err) {
@@ -542,7 +573,7 @@ export const appRouter = t.router({
   taskChangesDiff: t.procedure
     .input(
       z.object({
-        taskId: TaskId,
+        ...WorkSource,
         path: z.string().min(1),
         vs: z.enum(['working', 'outgoing']),
       }),
@@ -555,7 +586,7 @@ export const appRouter = t.router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      const located = locateTaskCwd(ctx, input.taskId);
+      const located = locateWork(ctx, input);
       try {
         return await readChangeDiff(located.cwd, input.path, input.vs, located.baseSha);
       } catch (err) {

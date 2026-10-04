@@ -243,7 +243,7 @@ function ChangedFiles({
     let cancelled = false;
     async function load(): Promise<void> {
       try {
-        const next = await api.taskChangesList(taskId);
+        const next = await api.taskChangesList({ taskId });
         if (cancelled) return;
         const files = next.files.length > 0 ? next.files : (next.outgoing?.files ?? []);
         if (files.length === 0) {

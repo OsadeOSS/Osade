@@ -22,6 +22,12 @@ async function base(): Promise<string> {
   return cachedBase;
 }
 
+/**
+ * What the Files and Changes panels read: a chat lane's checkout, or a project's own folder (for
+ * a terminal tab, which has no task).
+ */
+export type WorkSource = { taskId: string } | { repoId: string };
+
 async function call(kind: 'query' | 'mutation', path: string, input?: unknown): Promise<unknown> {
   const root = await base();
   const url =
@@ -309,10 +315,12 @@ export const api = {
     call('mutation', 'terminalWrite', { id, data }) as Promise<{ ok: true }>,
   terminalResize: (id: string, cols: number, rows: number) =>
     call('mutation', 'terminalResize', { id, cols, rows }) as Promise<{ ok: true }>,
+  terminalAgents: () =>
+    call('query', 'terminalAgents') as Promise<{ id: string; agent: string; name: string }[]>,
   terminalClose: (id: string) => call('mutation', 'terminalClose', { id }) as Promise<{ ok: true }>,
 
-  taskFsList: (taskId: string, dirs?: string[]) =>
-    call('query', 'taskFsList', { taskId, dirs }) as Promise<{
+  taskFsList: (source: WorkSource, dirs?: string[]) =>
+    call('query', 'taskFsList', { ...source, dirs }) as Promise<{
       cwd: string;
       listings: {
         dir: string;
@@ -327,19 +335,19 @@ export const api = {
       }[];
     }>,
 
-  taskFsRead: (taskId: string, path: string) =>
-    call('query', 'taskFsRead', { taskId, path }) as Promise<{
+  taskFsRead: (source: WorkSource, path: string) =>
+    call('query', 'taskFsRead', { ...source, path }) as Promise<{
       path: string;
       text: string | null;
       binary: boolean;
       truncated: boolean;
     }>,
 
-  taskFsWrite: (taskId: string, path: string, text: string) =>
-    call('mutation', 'taskFsWrite', { taskId, path, text }) as Promise<{ path: string; bytes: number }>,
+  taskFsWrite: (source: WorkSource, path: string, text: string) =>
+    call('mutation', 'taskFsWrite', { ...source, path, text }) as Promise<{ path: string; bytes: number }>,
 
-  taskChangesList: (taskId: string) =>
-    call('query', 'taskChangesList', { taskId }) as Promise<{
+  taskChangesList: (source: WorkSource) =>
+    call('query', 'taskChangesList', source) as Promise<{
       files: {
         path: string;
         flag: 'M' | 'A' | 'D' | '?';
@@ -358,8 +366,8 @@ export const api = {
       } | null;
     }>,
 
-  taskChangesDiff: (taskId: string, path: string, vs: 'working' | 'outgoing') =>
-    call('query', 'taskChangesDiff', { taskId, path, vs }) as Promise<{
+  taskChangesDiff: (source: WorkSource, path: string, vs: 'working' | 'outgoing') =>
+    call('query', 'taskChangesDiff', { ...source, path, vs }) as Promise<{
       path: string;
       flag: 'M' | 'A' | 'D' | '?' | null;
       diff: string;

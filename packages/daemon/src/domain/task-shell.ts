@@ -1,10 +1,13 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import type { IPty } from 'node-pty';
 
 import { resolveBinaryOnPath } from './agent-catalog.js';
+import { agentUnder, type AgentIdentity } from './agent-process.js';
+import { ProcessTable } from './process-table.js';
 
 /**
  * A real PTY in the lane's cwd — PowerShell on Windows, $SHELL elsewhere.
@@ -116,8 +119,108 @@ export function trimHistory(history: string, limit = HISTORY_LIMIT): string {
   return newline === -1 ? tail : tail.slice(newline + 1);
 }
 
+/** How long output may sit unsaved; a crash loses at most this much. */
+const SAVE_DELAY_MS = 1_000;
+
+/**
+ * Shown under output saved by an earlier daemon. Also leaves the alternate screen and resets
+ * colours, in case the old output ended inside a full-screen program.
+ */
+const RESTORED_NOTE =
+  '\r\n\x1b[0m\x1b[?1049l\x1b[?25h\x1b[2m── Osade restarted. Above is this terminal\'s earlier output; a new shell starts here. ──\x1b[0m\r\n';
+
+/** Process scans are shared by every caller asking within this window. */
+const AGENT_SCAN_MS = 1_500;
+
+export interface TaskShellsOptions {
+  /**
+   * Where each shell's recent output is saved. A shell lives in the daemon, so it outlives the
+   * window and a reopened tab simply reattaches; this only matters once the daemon itself has
+   * restarted (reboot, upgrade). Off when absent, as in tests.
+   */
+  historyDir?: string;
+}
+
 export class TaskShells {
   readonly #sessions = new Map<string, Session>();
+  readonly #historyDir: string | null;
+  readonly #saveTimers = new Map<string, NodeJS.Timeout>();
+
+  constructor(options: TaskShellsOptions = {}) {
+    this.#historyDir = options.historyDir ?? null;
+  }
+
+  #historyFile(key: string): string | null {
+    return this.#historyDir ? join(this.#historyDir, `${key.replace(/[^A-Za-z0-9_-]/g, '_')}.log`) : null;
+  }
+
+  #scheduleSave(key: string, session: Session): void {
+    if (!this.#historyDir || this.#saveTimers.has(key)) return;
+    this.#saveTimers.set(
+      key,
+      setTimeout(() => {
+        this.#saveTimers.delete(key);
+        const file = this.#historyFile(key)!;
+        mkdirSync(this.#historyDir!, { recursive: true });
+        void writeFile(file, session.history).catch(() => undefined);
+      }, SAVE_DELAY_MS),
+    );
+  }
+
+  /** Write now, synchronously — for shutdown, when a pending timer would never fire. */
+  #flush(key: string, session: Session): void {
+    const timer = this.#saveTimers.get(key);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.#saveTimers.delete(key);
+    try {
+      mkdirSync(this.#historyDir!, { recursive: true });
+      writeFileSync(this.#historyFile(key)!, session.history);
+    } catch {
+      // Best effort: losing a second of scrollback must not block shutdown.
+    }
+  }
+
+  #saved(key: string): string {
+    const file = this.#historyFile(key);
+    if (!file || !existsSync(file)) return '';
+    try {
+      return readFileSync(file, 'utf8');
+    } catch {
+      return '';
+    }
+  }
+  readonly #processes = new ProcessTable();
+  #agentScan: { at: number; result: Promise<Map<string, AgentIdentity>> } | null = null;
+
+  /**
+   * The coding agent running in each open shell, found by walking the shell's child processes —
+   * so any agent started by hand (claude, kiro-cli, cline, …) is seen, whether or not it sets a
+   * terminal title. Shells running no agent are absent.
+   */
+  agents(): Promise<Map<string, AgentIdentity>> {
+    const now = Date.now();
+    if (this.#agentScan && now - this.#agentScan.at < AGENT_SCAN_MS) return this.#agentScan.result;
+    const roots = new Map<string, number>();
+    for (const [id, session] of this.#sessions) if (session.alive) roots.set(id, session.child.pid);
+    const result =
+      roots.size === 0
+        ? Promise.resolve(new Map<string, AgentIdentity>())
+        : this.#processes.rowsUnder([...roots.values()]).then((rows) => {
+            const found = new Map<string, AgentIdentity>();
+            for (const [id, pid] of roots) {
+              const agent = agentUnder(rows, pid);
+              if (agent) found.set(id, agent);
+            }
+            return found;
+          });
+    this.#agentScan = { at: now, result };
+    // A failed scan is not cached, so the next caller retries.
+    result.catch(() => {
+      if (this.#agentScan?.result === result) this.#agentScan = null;
+    });
+    return result;
+  }
 
   /** Start (or reuse) the shell for this task. Returns the cwd it is running in. */
   open(taskId: string, cwd: string, size?: PtySize, kind: ShellKind = 'default'): string {
@@ -140,13 +243,18 @@ export class TaskShells {
       env: kind === 'gitbash' ? { ...shellEnv(), CHERE_INVOKING: '1' } : shellEnv(),
       ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}),
     });
-    const session: Session = { cwd, child, buf: '', history: '', alive: true };
+    // A shell from an earlier daemon is gone, but its output is not: show it above the new one.
+    const saved = this.#saved(taskId);
+    const history = saved.length > 0 ? trimHistory(saved + RESTORED_NOTE) : '';
+    const session: Session = { cwd, child, buf: '', history, alive: true };
     child.onData((chunk) => {
       session.buf += chunk;
       if (session.buf.length > 200_000) session.buf = session.buf.slice(-100_000);
       session.history = trimHistory(session.history + chunk);
+      this.#scheduleSave(taskId, session);
     });
     child.onExit(() => {
+      this.#flush(taskId, session);
       session.alive = false;
       if (this.#sessions.get(taskId)?.child === child) this.#sessions.delete(taskId);
     });
@@ -187,7 +295,17 @@ export class TaskShells {
     return session.history;
   }
 
+  /** The tab was closed: end the shell and forget its saved output. */
   close(taskId: string): void {
+    const timer = this.#saveTimers.get(taskId);
+    if (timer) clearTimeout(timer);
+    this.#saveTimers.delete(taskId);
+    const file = this.#historyFile(taskId);
+    if (file) rmSync(file, { force: true });
+    this.#end(taskId);
+  }
+
+  #end(taskId: string): void {
     const session = this.#sessions.get(taskId);
     if (!session) return;
     this.#sessions.delete(taskId);
@@ -204,7 +322,13 @@ export class TaskShells {
     }
   }
 
+  /** Daemon shutdown: end every shell but keep its output, so tabs come back with it. */
   closeAll(): void {
-    for (const id of [...this.#sessions.keys()]) this.close(id);
+    for (const [id, session] of [...this.#sessions]) {
+      this.#flush(id, session);
+      this.#end(id);
+    }
+    this.#processes.dispose();
+    this.#agentScan = null;
   }
 }

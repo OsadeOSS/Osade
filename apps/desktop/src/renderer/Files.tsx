@@ -7,7 +7,6 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { TaskView } from '@osade/contract';
 
 import { api } from './api.js';
 import { composeAppend } from './compose-event.js';
@@ -15,6 +14,7 @@ import { fileAttach, lineRangeFromOffsets, lineSpan, type ComposerAttach } from 
 import { fuzzyPath } from './files-search.js';
 import { flagColour, highlight } from './highlight.js';
 import { useFileOpenReminder } from './useFileOpenReminder.js';
+import type { WorkTarget } from './work-target.js';
 
 type Flag = 'M' | 'A' | 'D' | '?';
 
@@ -37,7 +37,7 @@ export interface FsEntry {
  * open. Open-file contents are not overwritten while the buffer is dirty.
  */
 export function Files({
-  task,
+  target,
   onAttach,
   openPath,
   onOpenChange,
@@ -45,7 +45,7 @@ export function Files({
   viewerHost,
   onShow,
 }: {
-  task: TaskView;
+  target: WorkTarget;
   /** The centre column's slot for the open file. Nothing renders there until it exists. */
   viewerHost: HTMLElement | null;
   /** A file was opened: bring the centre over to it. */
@@ -93,12 +93,12 @@ export function Files({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dirty = file != null && !file.binary && !file.truncated && text !== saved;
-  const stamp = `${task.task.id}:${task.cwd}:${task.agent?.last_event_at ?? 0}:${task.status}`;
+  const stamp = target.stamp;
   const drafts = useRef(new Map<string, string>());
   const tabs = preview && !pinned.includes(preview) ? [...pinned, preview] : pinned;
   const [range, setRange] = useState<{ from: number; to: number } | null>(null);
   const { note: reminder, dismiss: reminderDismiss } = useFileOpenReminder(
-    task.task.repo_id,
+    target.repoId,
     preview,
     notesRevision,
   );
@@ -149,7 +149,7 @@ export function Files({
     async function refresh(): Promise<void> {
       try {
         const dirs = [...expanded];
-        const result = await api.taskFsList(task.task.id, dirs);
+        const result = await api.taskFsList(target.source, dirs);
         const next: Record<string, FsEntry[]> = {};
         for (const row of result.listings) next[row.dir] = row.entries;
         if (!cancelled) {
@@ -167,7 +167,7 @@ export function Files({
       cancelled = true;
       window.clearInterval(tick);
     };
-  }, [stamp, expanded, task.task.id]);
+  }, [stamp, expanded, target.key]);
 
   useEffect(() => {
     if (selected == null) {
@@ -178,7 +178,7 @@ export function Files({
     }
     let cancelled = false;
     void api
-      .taskFsRead(task.task.id, selected)
+      .taskFsRead(target.source, selected)
       .then((next) => {
         if (cancelled) return;
         setFile(next);
@@ -193,7 +193,7 @@ export function Files({
     return () => {
       cancelled = true;
     };
-  }, [selected, stamp, task.task.id]);
+  }, [selected, stamp, target.key]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent): void {
@@ -210,7 +210,7 @@ export function Files({
     if (selected == null || file == null || file.binary || file.truncated || text === saved) return;
     setSaving(true);
     try {
-      await api.taskFsWrite(task.task.id, selected, text);
+      await api.taskFsWrite(target.source, selected, text);
       drafts.current.delete(selected);
       setSaved(text);
       setError(null);

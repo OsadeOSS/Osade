@@ -23,10 +23,35 @@ viewed. **Search** opens the command center.
 Under **Projects**, each repository shows its conversations grouped by branch. A branch marked
 **primary** is the repository's own checkout rather than an isolated worktree. Each conversation
 row shows its status colour, its agent, its title, and how long ago it was last active. Click a
-project or a branch's chat count to fold it. Double-click or right-click a project's name to rename
-it. Hover over a project to show its **+** button, which starts a new session there. The
+project or a branch's chat count to fold it. Double-click a project's name to rename it. Hover over
+a project to show its **+** button, which starts a new session there. The
 open-folder button beside **Projects** opens another repository and shows the new-session menu
-for it. The gear at the bottom of the sidebar sets the repository's default agent.
+for it. The repository appears under **Projects** as soon as you pick it, before it has any
+conversations, and Osade remembers it the next time the window opens. Agents you start yourself
+in a terminal tab appear under the project in a **Terminal** card; see
+[Agents started in a terminal tab](agents-and-conversations.md#agents-started-in-a-terminal-tab).
+The gear at the bottom of the sidebar sets the repository's default agent.
+
+### Project menu
+
+Right-click a project to open its menu:
+
+- **New session** opens the new-session menu for the project. **New terminal** opens a terminal
+  tab in its folder.
+- **Rename** changes the name shown in the sidebar; the folder itself is not renamed.
+- **Open in** opens the folder in File Explorer (Finder on macOS) or in any of VS Code, Cursor,
+  Windsurf, or Zed whose command-line launcher (`code`, `cursor`, `windsurf`, `zed`) is on your
+  `PATH`. An editor that is installed but has no launcher on `PATH` is not listed.
+- **Copy path** copies the folder's full path.
+- **Pin to top** keeps the project above the others; pinned projects show a pin icon, and the most
+  recently pinned is first. **Unpin** puts it back in its usual place.
+- **Collapse** / **Expand** folds the project, as clicking its name does.
+- **Remove project from Osade** takes the project out of the sidebar. Its folder, branches, and
+  conversations are not deleted. Opening the folder again with the open-folder button brings it
+  back.
+
+**New terminal**, **Open in**, and **Copy path** are greyed out until Osade knows where the
+project's folder is. Pins and removals are remembered on this computer only.
 
 Use `J` and `K` when you are not typing to select the next or previous conversation.
 
@@ -48,10 +73,11 @@ kill its underlying agent process.
 ## The conversation and the side panel
 
 The centre shows the conversation: durable user and agent turns, lane filters, approval requests,
-and the composer. There is no session header; the conversation starts right below the tabs. A
-switch above it moves the centre between **Chat**, **Terminal** (the live terminal), and, once you
-have opened one, **File** and **Diff**. The branch menu sits at the right of that switch. When a conversation has more than one lane, a row of lane buttons above it
-picks which lane the views and terminal follow.
+and the composer. There is no session header; the conversation starts right below the tabs. The
+bar above it holds the branch menu at the right. Once you open a file or diff, the bar also shows
+**File** and **Diff** to bring them back, and **Chat** to return to the conversation. When a
+conversation has more than one lane, a row of lane buttons above it picks which lane the views
+follow.
 
 The side panel holds the other views. Pick one from its icon row, or press `2` through `6` when
 you are not typing:
@@ -70,11 +96,27 @@ you are not typing:
 
 Show or hide the panel with the button at the right end of the tab strip. Drag its left edge to
 resize it, and double-click the edge to reset the width. Osade remembers whether it was open and how
-wide it was. In windows narrower than 960 px, the sidebar and the panel start hidden. With no
-conversation open, the panel shows its icons disabled.
+wide it was. In windows narrower than 960 px, the sidebar and the panel start hidden. With neither
+a conversation nor a project terminal open, the panel shows its icons disabled.
 
 An open file or diff stays open while you look at another panel view. Switch back with **File** or
 **Diff**. Focusing a different lane closes them, since that lane has its own working tree.
+
+### The panel for a terminal tab
+
+A terminal tab opened for a project (from the new-session menu or the project's right-click menu)
+gets the same panel, pointed at the project's own folder rather than a task's checkout. This is
+how you follow an agent you started yourself in the terminal:
+
+- **Files** lists the folder with Git status. Files you open can be edited and saved there.
+- **Changes** shows the folder's uncommitted changes against `HEAD`, and commits not yet pushed to
+  the branch's upstream. It has no **Open pull request** section.
+- **Rules** and **Notes** are the project's, as in a chat.
+- **Checks** has nothing to show; verification plans run for chat lanes only.
+
+Files and Changes refresh every two seconds. A file or diff you open covers the terminal. The
+terminal keeps running underneath, and the **Terminal** chip above the viewer switches back to it.
+Open files are closed when you switch to another tab.
 
 ## Ask about what you are viewing
 

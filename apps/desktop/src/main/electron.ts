@@ -32,6 +32,7 @@ app.setAppUserModelId('dev.osade.app');
 import { repoFromArgv } from './argv.js';
 import { readBounds } from './browser-contract.js';
 import { BrowserViewHost } from './browser-view.js';
+import { availableEditors, isFolder, openInEditor } from './editors.js';
 import {
   beginDeviceFlow,
   githubClientId,
@@ -567,6 +568,24 @@ async function respawnDaemonWithToken(): Promise<void> {
   daemonPort = daemon.port;
   spawnedDaemon = daemon.child;
 }
+
+/** Editors on PATH, for the project menu's "Open in". */
+ipcMain.handle('osade:editors', () => availableEditors());
+
+/**
+ * Open a project folder outside Osade: `files` is Explorer / Finder / the file manager, anything
+ * else an editor id from `osade:editors`. Only existing folders — this is not a general launcher.
+ */
+ipcMain.handle('osade:open-folder-in', async (_event, folder?: unknown, target?: unknown) => {
+  if (!isFolder(folder)) throw new Error('not a folder');
+  if (target === 'files') {
+    const failed = await shell.openPath(folder);
+    if (failed) throw new Error(failed);
+    return;
+  }
+  if (typeof target !== 'string') throw new Error('no target');
+  openInEditor(target, folder);
+});
 
 ipcMain.handle('osade:choose-repository', async (event, defaultPath?: unknown) => {
   /**

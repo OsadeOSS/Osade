@@ -71,16 +71,20 @@ export function ShellTerminal({
   cwd,
   shell,
   visible,
+  onTitle,
 }: {
   id: string;
   cwd: string;
   shell: ShellKind;
   visible: boolean;
+  /** The title the program running in it sets — how agents started by hand are spotted. */
+  onTitle?: (title: string) => void;
 }): JSX.Element {
   return (
     <PtyTerminal
       sessionKey={id}
       visible={visible}
+      onTitle={onTitle}
       backend={{
         open: (size) => api.terminalOpen(id, cwd, shell, size),
         read: () => api.terminalRead(id),
@@ -95,12 +99,17 @@ function PtyTerminal({
   sessionKey,
   visible,
   backend,
+  onTitle,
 }: {
   sessionKey: string;
   visible: boolean;
   backend: PtyBackend;
+  onTitle?: (title: string) => void;
 }): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
+  // Read through a ref so a new callback each render does not restart the session.
+  const titleRef = useRef(onTitle);
+  titleRef.current = onTitle;
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
 
@@ -126,6 +135,7 @@ function PtyTerminal({
     term.unicode.activeVersion = '11';
     // Opens through the main window's handler, which hands it to the system browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri, '_blank')));
+    const titled = term.onTitleChange((title) => titleRef.current?.(title));
     term.open(el);
     termRef.current = term;
     fitRef.current = fit;
@@ -250,6 +260,7 @@ function PtyTerminal({
       stop = true;
       data?.dispose();
       resized?.dispose();
+      titled.dispose();
       window.clearTimeout(timer);
       ro.disconnect();
       el.removeEventListener('paste', onPaste, true);
