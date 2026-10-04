@@ -17,6 +17,22 @@ agent, follow-up messages go to the conversation's primary lane.
 The repository setting controls the default agent for new chats. Osade currently recognizes
 Claude Code, Codex, OpenCode, and Pi and checks whether each command is available on `PATH`.
 
+## Terminal tabs
+
+The new-session menu (`Ctrl+T` / `Cmd+T`) also opens a plain shell in the repository folder, in
+its own tab. It is not attached to any agent or chat.
+
+- On Windows the menu offers **New Terminal: PowerShell**, **New Terminal: CMD Prompt**, and
+  **New Terminal: Git Bash**. Git Bash appears only when Git for Windows is installed; Osade looks
+  for its `bash.exe` next to `git` on `PATH` and in the standard install folders, so the WSL
+  `bash` launcher is never used. Git Bash starts as a login shell but stays in the repository
+  folder.
+- On macOS and Linux the menu offers one terminal running your `$SHELL`.
+
+The shell keeps running while you switch to other tabs, and its scrollback stays in the tab.
+Closing the tab (`Ctrl+W` / `Cmd+W`, or its ×) ends the shell. Terminal tabs are not restored
+when Osade restarts.
+
 ## Run multiple agents in one conversation
 
 Use agent mentions to target work:

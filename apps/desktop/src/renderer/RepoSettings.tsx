@@ -22,11 +22,14 @@ export function RepoSettings({
   defaultAgent,
   catalog,
   onSaved,
+  placement = 'down',
 }: {
   repoId: string;
   defaultAgent: string | null;
   catalog: CatalogAgent[];
   onSaved: (agentId: string) => void;
+  /** `up` opens the panel above the button, left-aligned — for the sidebar's footer. */
+  placement?: 'down' | 'up';
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(defaultAgent ?? 'claude');
@@ -70,9 +73,9 @@ export function RepoSettings({
         <div
           style={{
             position: 'absolute',
-            right: 0,
-            top: '100%',
-            marginTop: 4,
+            ...(placement === 'up'
+              ? { left: 0, bottom: '100%', marginBottom: 4 }
+              : { right: 0, top: '100%', marginTop: 4 }),
             // The sidebar can be 240px wide; a right-anchored 240px panel would clip on the left.
             width: 212,
             zIndex: 15,

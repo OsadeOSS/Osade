@@ -1,3 +1,4 @@
+import { existsSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { initTRPC, TRPCError } from '@trpc/server';
@@ -30,7 +31,7 @@ import {
   detachContextRepo,
 } from '../domain/chat-context.js';
 import { AgentLiveError, BranchHeldError, LaneIsolatedError, type LaunchTask } from '../domain/launch-task.js';
-import { TaskShells } from '../domain/task-shell.js';
+import { availableShells, TaskShells } from '../domain/task-shell.js';
 import { NoHeadlessAgentError, type HeadlessRuns } from '../domain/headless-run.js';
 import {
   agentPrCopy,
@@ -100,6 +101,9 @@ export interface DaemonContext {
 }
 
 const t = initTRPC.context<DaemonContext>().create();
+
+const ShellKind = z.enum(['default', 'powershell', 'cmd', 'gitbash']);
+const TerminalId = z.string().uuid();
 
 function viewFor(ctx: DaemonContext, taskId: string): TaskView | null {
   return toTaskView(ctx.db, taskId, ctx.now());
@@ -351,6 +355,77 @@ export const appRouter = t.router({
     .output(z.object({ ok: z.literal(true) }))
     .mutation(({ ctx, input }) => {
       ctx.shells.close(input.taskId);
+      return { ok: true as const };
+    }),
+
+  /*
+   * Standalone terminal tabs: a PTY in a folder, not tied to any task. Keyed by a
+   * renderer-minted UUID under a `term:` prefix so they can never collide with a lane's shell.
+   */
+  terminalShells: t.procedure
+    .output(z.array(z.object({ kind: ShellKind, label: z.string() })))
+    .query(() => availableShells()),
+
+  terminalOpen: t.procedure
+    .input(
+      z.object({
+        id: TerminalId,
+        cwd: z.string().min(1),
+        shell: ShellKind,
+        cols: z.number().int().min(2).max(500).optional(),
+        rows: z.number().int().min(2).max(200).optional(),
+      }),
+    )
+    .output(z.object({ cwd: z.string() }))
+    .mutation(({ ctx, input }) => {
+      if (!existsSync(input.cwd) || !statSync(input.cwd).isDirectory()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `not a folder: ${input.cwd}` });
+      }
+      const size =
+        input.cols != null && input.rows != null ? { cols: input.cols, rows: input.rows } : undefined;
+      try {
+        return { cwd: ctx.shells.open(`term:${input.id}`, input.cwd, size, input.shell) };
+      } catch (err) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: (err as Error).message });
+      }
+    }),
+
+  terminalRead: t.procedure
+    .input(z.object({ id: TerminalId }))
+    .output(z.object({ text: z.string() }))
+    .query(({ ctx, input }) => ({ text: ctx.shells.read(`term:${input.id}`) })),
+
+  terminalWrite: t.procedure
+    .input(z.object({ id: TerminalId, data: z.string().min(1) }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      try {
+        ctx.shells.write(`term:${input.id}`, input.data);
+      } catch (err) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: (err as Error).message });
+      }
+      return { ok: true as const };
+    }),
+
+  terminalResize: t.procedure
+    .input(
+      z.object({
+        id: TerminalId,
+        cols: z.number().int().min(2).max(500),
+        rows: z.number().int().min(2).max(200),
+      }),
+    )
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      ctx.shells.resize(`term:${input.id}`, { cols: input.cols, rows: input.rows });
+      return { ok: true as const };
+    }),
+
+  terminalClose: t.procedure
+    .input(z.object({ id: TerminalId }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(({ ctx, input }) => {
+      ctx.shells.close(`term:${input.id}`);
       return { ok: true as const };
     }),
 

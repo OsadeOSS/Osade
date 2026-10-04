@@ -3,16 +3,67 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 
-import { api } from './api.js';
+import { api, type ShellKind } from './api.js';
 import { terminalKeyAction } from './lane-terminal.js';
 
+/** Where a terminal's bytes go: a lane's shell, or a standalone terminal tab's. */
+interface PtyBackend {
+  open: (size: { cols: number; rows: number }) => Promise<unknown>;
+  read: () => Promise<{ text: string }>;
+  write: (data: string) => Promise<unknown>;
+  resize: (cols: number, rows: number) => Promise<unknown>;
+}
+
 /** Interactive PowerShell (or $SHELL) PTY in this lane's checkout. */
-export function LaneTerminal({
-  taskId,
+export function LaneTerminal({ taskId, visible }: { taskId: string; visible: boolean }): JSX.Element {
+  return (
+    <PtyTerminal
+      sessionKey={taskId}
+      visible={visible}
+      backend={{
+        open: (size) => api.taskShellOpen(taskId, size),
+        read: () => api.taskShellRead(taskId),
+        write: (data) => api.taskShellWrite(taskId, data),
+        resize: (cols, rows) => api.taskShellResize(taskId, cols, rows),
+      }}
+    />
+  );
+}
+
+/** A terminal tab: its own PTY in a folder, running the shell the user picked. */
+export function ShellTerminal({
+  id,
+  cwd,
+  shell,
   visible,
 }: {
-  taskId: string;
+  id: string;
+  cwd: string;
+  shell: ShellKind;
   visible: boolean;
+}): JSX.Element {
+  return (
+    <PtyTerminal
+      sessionKey={id}
+      visible={visible}
+      backend={{
+        open: (size) => api.terminalOpen(id, cwd, shell, size),
+        read: () => api.terminalRead(id),
+        write: (data) => api.terminalWrite(id, data),
+        resize: (cols, rows) => api.terminalResize(id, cols, rows),
+      }}
+    />
+  );
+}
+
+function PtyTerminal({
+  sessionKey,
+  visible,
+  backend,
+}: {
+  sessionKey: string;
+  visible: boolean;
+  backend: PtyBackend;
 }): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -95,17 +146,17 @@ export function LaneTerminal({
     };
     el.addEventListener('paste', onPaste, true);
 
-    void api
-      .taskShellOpen(taskId, size)
+    void backend
+      .open(size)
       .then(() => {
         if (stop) return;
         data = term.onData((chunk) => {
-          void api.taskShellWrite(taskId, chunk).catch((err: Error) => {
+          void backend.write(chunk).catch((err: Error) => {
             term.write(`\r\n\x1b[31m${err.message}\x1b[0m\r\n`);
           });
         });
         resized = term.onResize(({ cols, rows }) => {
-          if (cols >= 2 && rows >= 2) void api.taskShellResize(taskId, cols, rows);
+          if (cols >= 2 && rows >= 2) void backend.resize(cols, rows);
         });
       })
       .catch((err: Error) => {
@@ -113,7 +164,7 @@ export function LaneTerminal({
       });
 
     const timer = window.setInterval(() => {
-      void api.taskShellRead(taskId).then((chunk) => {
+      void backend.read().then((chunk) => {
         if (chunk.text.length > 0) term.write(chunk.text);
       });
     }, 16);
@@ -134,7 +185,8 @@ export function LaneTerminal({
       fitRef.current = null;
       term.dispose();
     };
-  }, [taskId]);
+    // The backend closes over the same key; a new key is a new session.
+  }, [sessionKey]);
 
   useEffect(() => {
     const term = termRef.current;

@@ -85,3 +85,9 @@ belongs in this file in the same PR.
 
 The UI names IBM Plex Mono and falls back to the system monospace stack. Plex is **not
 bundled**; there is nothing to attribute under the SIL Open Font License until it is.
+
+The terminal shell icons in `apps/desktop/src/renderer/shell-icon.tsx` (PowerShell, CMD Prompt,
+generic terminal) and `apps/desktop/src/renderer/assets/git-for-windows.svg` are taken from
+[Orca](https://github.com/stablyai/orca) (`src/renderer/src/components/tab-bar/shell-icons.tsx`
+and `resources/gwindows_logo.svg`), MIT License, Copyright (c) 2026 Lovecast Inc. The Git for
+Windows mark belongs to the Git for Windows project.

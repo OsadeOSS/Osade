@@ -15,7 +15,7 @@ or text editor needs the same keystroke.
 | Approve the visible gate | `Ctrl+Enter` | `Cmd+Enter` |
 | Deny the visible gate | `Ctrl+Backspace` | `Cmd+Backspace` |
 | Previous/next conversation | `K` / `J` | `K` / `J` |
-| Chat, Files, Checks, Diff, Rules, Notes | `1` … `6` | `1` … `6` |
+| Side panel: Files, Checks, Changes, Rules, Notes | `2` … `6` | `2` … `6` |
 
 ## Composer
 

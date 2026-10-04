@@ -1,29 +1,27 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent } from 'react';
 
 import type { TaskView } from '@osade/contract';
 
 import { AgentMark } from './agent-icon.js';
-import { AgentPicker, resolveNewChatAgent } from './AgentPicker.js';
+import { AgentPicker, resolveNewChatAgent, type ShellOption } from './AgentPicker.js';
 import osadeLogo from './assets/osade.png';
 import { Board } from './Board.js';
 import { BROWSER_DEFAULT, BROWSER_MAX, BROWSER_MIN, clampBrowserWidth } from './browser-view.js';
 import { BrowserPane } from './BrowserPane.js';
 import { CommandPalette } from './CommandPalette.js';
 import { photosPrompt, type ComposerPhoto } from './compose-photos.js';
-import { Detail, DraftPane, type FileContext, type Lane } from './Detail.js';
-import { api } from './api.js';
-import { attachCheckoutHint, isolatedWorktreeHint } from './branch-copy.js';
+import { Detail, DraftPane, PANES, PanelTabs, type FileContext, type PanelLane } from './Detail.js';
+import { api, type ShellKind } from './api.js';
 import { chord } from './chords.js';
 import { type PendingLane } from './delivery.js';
 import { GitHubSignIn, useGithub } from './GitHubSignIn.js';
+import { ShellTerminal } from './LaneTerminal.js';
 import {
   chatActivity,
   chatLabel,
-  displayBranch,
   groupChats,
   laneDigest,
   primaryLane,
-  showPinnedNeedsYou,
   withDigest,
   type ChatGroup,
 } from './lanes.js';
@@ -36,14 +34,16 @@ import {
 } from './mentions.js';
 import { QuickCapture } from './QuickCapture.js';
 import { notesPrompt } from './quick-notes.js';
+import { ProjectSidebar, type ProjectGroup } from './ProjectSidebar.js';
 import { contextReposForChat } from './repo-context.js';
 import { RepoSettings, useAgentCatalog } from './RepoSettings.js';
-import { STATUS, TONE_COLOUR, ago, summarise } from './status.js';
+import { ShellIcon } from './shell-icon.js';
+import { STATUS, summarise } from './status.js';
+import { StatusBar } from './StatusBar.js';
 import { titleFrom } from './title.js';
 import { useLedger } from './useLedger.js';
 import { useRepo, type OpenRepo } from './useRepo.js';
 
-const LANES: Lane[] = ['transcript', 'files', 'checks', 'diff', 'rules', 'notes'];
 const COLLAPSE_KEY = 'osade.repo-collapsed';
 const NAMES_KEY = 'osade.repo-names';
 const GITHUB_SKIP_KEY = 'osade.github-skipped';
@@ -53,6 +53,11 @@ const SIDEBAR_MAX = 640;
 const SIDEBAR_DEFAULT = 320;
 const BROWSER_KEY = 'osade.browser-open';
 const BROWSER_WIDTH_KEY = 'osade.browser-width';
+const PANEL_KEY = 'osade.panel-open';
+const PANEL_WIDTH_KEY = 'osade.panel-width';
+const PANEL_MIN = 280;
+const PANEL_MAX = 760;
+const PANEL_DEFAULT = 380;
 
 type Tab =
   | {
@@ -67,7 +72,8 @@ type Tab =
       optimistic?: string;
       submitting?: boolean;
     }
-  | { kind: 'chat'; id: string; focusId?: string; optimistic?: string; isolatedNotice?: string };
+  | { kind: 'chat'; id: string; focusId?: string; optimistic?: string; isolatedNotice?: string }
+  | { kind: 'terminal'; id: string; cwd: string; shell: ShellKind; title: string };
 
 interface PendingDraft {
   repoId: string | null;
@@ -81,6 +87,7 @@ export function App(): JSX.Element {
   const { tasks: allTasks, connection } = useLedger();
   const { repo, error: repoError, requestId } = useRepo();
   const catalog = useAgentCatalog(connection === 'live');
+  const shells = useShellOptions(connection === 'live');
   const github = useGithub();
   const [githubSkipped, setGithubSkipped] = useState(() => {
     try {
@@ -94,7 +101,26 @@ export function App(): JSX.Element {
   const [repoPaths, setRepoPaths] = useState<Record<string, string>>({});
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [lane, setLane] = useState<Lane>('transcript');
+  // The right panel, like Orca's: Files, Checks, Changes, Rules, Notes beside the chat.
+  const [panel, setPanel] = useState<PanelLane>('diff');
+  const [panelOpen, setPanelOpen] = useState(() => {
+    try {
+      return localStorage.getItem(PANEL_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const [panelWidth, setPanelWidth] = useState(() => loadPanelWidth());
+  const [panelDrag, setPanelDrag] = useState(false);
+  const panelDragOrigin = useRef<{ x: number; width: number } | null>(null);
+  const [panelHost, setPanelHost] = useState<HTMLElement | null>(null);
+  // Back/forward over the tabs you have looked at, like the arrows atop Orca's sidebar.
+  const history = useRef<{ stack: string[]; index: number; jumping: boolean }>({
+    stack: [],
+    index: -1,
+    jumping: false,
+  });
+  const [, setHistoryTick] = useState(0);
   const [view, setView] = useState<'list' | 'board'>('list');
   const [palette, setPalette] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -140,13 +166,11 @@ export function App(): JSX.Element {
       : (selectedChat.lanes.find((l) => l.task.id === activeTab.focusId) ??
         primaryLane(selectedChat));
 
-  // List + an open tab: sidebar beside the chat. Kanban is the whole window.
+  // An open tab fills the centre; Kanban takes the centre's place without closing it.
   const showDetail =
     view !== 'board' &&
     activeTab != null &&
-    (activeTab.kind === 'draft' || selectedChat != null);
-  const showWorkspace = view !== 'board';
-  const sidebarVisible = view === 'board' || sidebarOpen;
+    (activeTab.kind === 'draft' || activeTab.kind === 'terminal' || selectedChat != null);
 
   /**
    * Which repository a new note belongs to: the chat in focus, else the open one.
@@ -181,7 +205,6 @@ export function App(): JSX.Element {
       { kind: 'draft', id, repoId: repo.repoId, repoPath: repo.path, agentId: defaultAgent },
     ]);
     setActiveId(id);
-    setLane('transcript');
   }, [repo, requestId]);
 
   useEffect(() => {
@@ -194,7 +217,10 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 960px)');
-    const sync = () => setSidebarOpen(!mq.matches);
+    const sync = () => {
+      setSidebarOpen(!mq.matches);
+      if (mq.matches) setPanelOpen(false);
+    };
     sync();
     mq.addEventListener('change', sync);
     return () => mq.removeEventListener('change', sync);
@@ -216,6 +242,27 @@ export function App(): JSX.Element {
   useEffect(() => {
     localStorage.setItem(BROWSER_WIDTH_KEY, String(browserWidth));
   }, [browserWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(PANEL_KEY, panelOpen ? '1' : '0');
+  }, [panelOpen]);
+
+  useEffect(() => {
+    localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth));
+  }, [panelWidth]);
+
+  useEffect(() => {
+    const h = history.current;
+    if (activeId == null) return;
+    if (h.jumping) {
+      h.jumping = false;
+      return;
+    }
+    if (h.stack[h.index] === activeId) return;
+    h.stack = [...h.stack.slice(0, h.index + 1), activeId];
+    h.index = h.stack.length - 1;
+    setHistoryTick((n) => n + 1);
+  }, [activeId]);
 
   useEffect(() => {
     if (github.status.signedIn || githubSkipped) {
@@ -297,7 +344,6 @@ export function App(): JSX.Element {
         const tab = tabs[Number(event.key) - 1];
         if (tab) {
           setActiveId(tab.id);
-          setLane('transcript');
         }
         return;
       }
@@ -339,21 +385,92 @@ export function App(): JSX.Element {
       }
       if (modKey && event.shiftKey && event.key.toLowerCase() === 'q') {
         event.preventDefault();
-        setView('list');
-        setLane((current) => (current === 'notes' ? 'transcript' : 'notes'));
+        toggleNotes();
         return;
       }
 
-      const digit = event.key >= '1' && event.key <= '6';
-      if (digit && selected) {
+      const pane = PANES.find((item) => item.chord === event.key);
+      if (pane && selected) {
         event.preventDefault();
-        setLane(LANES[Number(event.key) - 1]!);
+        openPanel(pane.id);
       }
     }
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [activeId, agentModal, defaultAgent, flat, menu, palette, repo, selected, selectedChat, tabs]);
+  }, [activeId, agentModal, defaultAgent, flat, menu, palette, panel, panelOpen, repo, selected, selectedChat, tabs]);
+
+  function openPanel(next: PanelLane): void {
+    setPanel(next);
+    setPanelOpen(true);
+  }
+
+  function toggleNotes(): void {
+    if (panelOpen && panel === 'notes') {
+      setPanelOpen(false);
+      return;
+    }
+    openPanel('notes');
+  }
+
+  /** The nearest entry in that direction whose tab is still open, or -1. */
+  function historyTarget(delta: 1 | -1): number {
+    const h = history.current;
+    const open = new Set(tabs.map((t) => t.id));
+    for (let i = h.index + delta; i >= 0 && i < h.stack.length; i += delta) {
+      if (open.has(h.stack[i]!)) return i;
+    }
+    return -1;
+  }
+
+  function goHistory(delta: 1 | -1): void {
+    const i = historyTarget(delta);
+    if (i < 0) return;
+    const h = history.current;
+    const id = h.stack[i]!;
+    h.index = i;
+    if (id !== activeId) h.jumping = true;
+    setView('list');
+    setActiveId(id);
+    setHistoryTick((n) => n + 1);
+  }
+
+  async function openFolder(): Promise<void> {
+    let picked: OpenRepo | null;
+    try {
+      picked = await pickRepo();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (!picked) return;
+    const opened = picked;
+    setRepoPaths((current) => ({ ...current, [opened.repoId]: opened.path }));
+    await openDraftTab({ repoId: opened.repoId, path: opened.path });
+  }
+
+  function onPanelPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    panelDragOrigin.current = { x: event.clientX, width: panelWidth };
+    setPanelDrag(true);
+  }
+
+  function onPanelPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    const origin = panelDragOrigin.current;
+    if (origin == null) return;
+    setPanelWidth(clampPanel(origin.width + origin.x - event.clientX));
+  }
+
+  function onPanelPointerUp(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (panelDragOrigin.current == null) return;
+    panelDragOrigin.current = null;
+    setPanelDrag(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
 
   function openLane(task: TaskView): void {
     setView('list');
@@ -368,7 +485,6 @@ export function App(): JSX.Element {
       return [...current, { kind: 'chat', id: chatId, focusId: task.task.id }];
     });
     setActiveId(chatId);
-    setLane('transcript');
   }
 
   async function openDraftTab(from?: {
@@ -418,7 +534,6 @@ export function App(): JSX.Element {
       },
     ]);
     setActiveId(tabId);
-    setLane('transcript');
   }
 
   async function openPlan(): Promise<void> {
@@ -443,12 +558,27 @@ export function App(): JSX.Element {
           : [...current, { kind: 'chat', id: created.chatId, focusId: created.taskId }],
       );
       setActiveId(created.chatId);
-      setLane('transcript');
     }
+  }
+
+  function openTerminal(pending: PendingDraft, shell: ShellKind): void {
+    setAgentModal(null);
+    if (pending.repoPath == null) return;
+    const option = shells.find((s) => s.kind === shell);
+    const id = crypto.randomUUID();
+    setView('list');
+    setTabs((current) => [
+      ...current,
+      { kind: 'terminal', id, cwd: pending.repoPath!, shell, title: option?.label ?? 'Terminal' },
+    ]);
+    setActiveId(id);
   }
 
   function closeTab(id: string | null): void {
     if (id == null) return;
+    if (tabs.some((t) => t.id === id && t.kind === 'terminal')) {
+      void api.terminalClose(id).catch(() => undefined);
+    }
     setTabs((current) => {
       const next = current.filter((t) => t.id !== id);
       setActiveId((active) => {
@@ -804,59 +934,97 @@ export function App(): JSX.Element {
     );
   }
 
+  const projects: ProjectGroup[] = byRepo.map((group) => ({
+    repoId: group.repoId,
+    label: repoLabel(group.repoId, repo, group.chats[0]?.lanes[0]?.cwd ?? null, aliases),
+    chats: group.chats,
+  }));
+  if (repo && !projects.some((project) => project.repoId === repo.repoId)) {
+    projects.unshift({ repoId: repo.repoId, label: repoLabel(repo.repoId, repo, null, aliases), chats: [] });
+  }
+  const detailShown =
+    showDetail && activeTab?.kind === 'chat' && selectedChat != null && selected != null;
+  const resizing = sidebarDrag || browserDrag || panelDrag;
+
   return (
     <div
       className="osade-shell"
       style={{
-        display: 'grid',
-        gridTemplateColumns: [
-          // Must mirror the children rendered below, or the grid wraps them into rows.
-          showWorkspace && sidebarOpen ? `${sidebarWidth}px` : null,
-          showWorkspace && sidebarOpen ? '6px' : null,
-          'minmax(0, 1fr)',
-          browserOpen ? '6px' : null,
-          browserOpen ? `${browserWidth}px` : null,
-        ]
-          .filter(Boolean)
-          .join(' '),
+        display: 'flex',
+        flexDirection: 'column',
         height: '100%',
         background: 'var(--bg-0)',
-        cursor: sidebarDrag || browserDrag ? 'col-resize' : undefined,
-        userSelect: sidebarDrag || browserDrag ? 'none' : undefined,
+        cursor: resizing ? 'col-resize' : undefined,
+        userSelect: resizing ? 'none' : undefined,
       }}
     >
-      {sidebarVisible && (
-      <main
-        className="osade-sidebar"
+      <div
+        className="osade-main"
         style={{
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          background: 'var(--bg-1)',
-          minWidth: 0,
-          height: '100%',
+          flex: 1,
+          minHeight: 0,
+          display: 'grid',
+          gridTemplateColumns: [
+            // Must mirror the children rendered below, or the grid wraps them into rows.
+            sidebarOpen ? `${sidebarWidth}px` : null,
+            sidebarOpen ? '6px' : null,
+            'minmax(0, 1fr)',
+            browserOpen ? '6px' : null,
+            browserOpen ? `${browserWidth}px` : null,
+            panelOpen ? '6px' : null,
+            panelOpen ? `${panelWidth}px` : null,
+          ]
+            .filter(Boolean)
+            .join(' '),
         }}
       >
-        <Header
-          repo={repo}
-          branch={
-            repo
-              ? (chats.find((t) => t.task.repo_id === repo.repoId && t.attachment === 'repo')
-                  ?.branch ?? repo.currentBranch)
-              : null
+      {sidebarOpen && (
+        <ProjectSidebar
+          projects={projects}
+          selectedChatId={selectedChat?.chatId ?? null}
+          collapsed={collapsed}
+          onToggle={(key) =>
+            setCollapsed((set) => {
+              const next = new Set(set);
+              if (next.has(key)) next.delete(key);
+              else next.add(key);
+              return next;
+            })
           }
-          summary={summarise({
-            needsYou: needsYou.length,
-            working: working.length,
-            total: groups.length,
-          })}
+          renaming={renaming}
+          onRename={setRenaming}
+          onAlias={(repoId, next) =>
+            setAliases((current) => {
+              const copy = { ...current };
+              if (next.length === 0) delete copy[repoId];
+              else copy[repoId] = next;
+              return copy;
+            })
+          }
+          connection={connection}
+          hasRepo={repo != null}
           view={view}
-          onView={setView}
+          onTasks={() => setView((current) => (current === 'board' ? 'list' : 'board'))}
           browserOpen={browserOpen}
           onBrowser={() => setBrowserOpen((open) => !open)}
-          onNew={() => void openDraftTab()}
+          notesOpen={panelOpen && panel === 'notes'}
+          onNotes={toggleNotes}
           onSearch={() => setPalette(true)}
-          onHide={showWorkspace ? () => setSidebarOpen(false) : undefined}
+          onHide={() => setSidebarOpen(false)}
+          canBack={historyTarget(-1) >= 0}
+          canForward={historyTarget(1) >= 0}
+          onBack={() => goHistory(-1)}
+          onForward={() => goHistory(1)}
+          onOpenChat={(chat) => openLane(primaryLane(chat))}
+          onMenu={(id, x, y) => setMenu({ id, x, y })}
+          onNewChat={(repoId) =>
+            void openDraftTab({
+              repoId,
+              path: repoPaths[repoId] ?? (repo?.repoId === repoId ? repo.path : undefined),
+            })
+          }
+          onOpenFolder={() => void openFolder()}
+          error={repoError ?? actionError}
           settings={
             repo ? (
               <RepoSettings
@@ -864,225 +1032,34 @@ export function App(): JSX.Element {
                 defaultAgent={defaultAgent}
                 catalog={catalog}
                 onSaved={setAgentOverride}
+                placement="up"
               />
             ) : null
           }
         />
-        {(repoError ?? actionError) && (
-          <div
-            title={repoError ?? actionError ?? undefined}
-            style={{
-              padding: '6px 16px',
-              fontSize: 'var(--t-xs)',
-              color: 'var(--st-fail)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              borderBottom: '0.5px solid var(--line)',
-            }}
-          >
-            {repoError ?? actionError}
-          </div>
-        )}
-
-        <div style={{ flex: 1, overflow: view === 'board' ? 'hidden' : 'auto', minHeight: 0 }}>
-          {chats.length === 0 && tabs.length === 0 ? (
-            <Empty
-              connection={connection}
-              repo={repo}
-              onNew={() => void openDraftTab()}
-            />
-          ) : view === 'board' ? (
-            <Board
-              chats={groups}
-              selectedId={selectedChat?.chatId ?? null}
-              onSelect={(chat) => openLane(primaryLane(chat))}
-              onMenu={(id, x, y) => setMenu({ id, x, y })}
-            />
-          ) : (
-            <>
-              <div className="sidebar-kicker">Conversations</div>
-              {showPinnedNeedsYou(needsYou.length, groups.length) && (
-                <section>
-                  <h2 style={groupHeadStyle('var(--st-needs)')}>Needs you · {needsYou.length}</h2>
-                  {needsYou.map((chat) => (
-                    <ChatRow
-                      key={`need-${chat.chatId}`}
-                      chat={chat}
-                      selected={selectedChat?.chatId === chat.chatId}
-                      onSelect={() => openLane(primaryLane(chat))}
-                      onMenu={(x, y) =>
-                        setMenu({ id: primaryLane(chat).task.id, x, y })
-                      }
-                    />
-                  ))}
-                </section>
-              )}
-
-              {byRepo.map((group) => {
-                const closed = collapsed.has(group.repoId);
-                const sample = group.chats[0]?.lanes[0];
-                const label = repoLabel(group.repoId, repo, sample?.cwd ?? null, aliases);
-                const hideRepoHead =
-                  repo != null && byRepo.length === 1 && group.repoId === repo.repoId;
-                const groupBranch =
-                  group.chats.flatMap((c) => c.lanes).find((t) => t.attachment === 'repo')
-                    ?.branch ?? sample?.branch;
-                return (
-                  <section key={group.repoId}>
-                    {!hideRepoHead && (
-                    <h2 style={groupHeadStyle('var(--ink-2)')}>
-                      <button
-                        onClick={() =>
-                          setCollapsed((set) => {
-                            const next = new Set(set);
-                            if (next.has(group.repoId)) next.delete(group.repoId);
-                            else next.add(group.repoId);
-                            return next;
-                          })
-                        }
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          padding: 0,
-                          color: 'inherit',
-                          font: 'inherit',
-                        }}
-                      >
-                        {closed ? '▸' : '▾'}
-                      </button>
-                      {renaming === group.repoId ? (
-                        <input
-                          autoFocus
-                          defaultValue={label}
-                          aria-label="Repository name"
-                          onClick={(event) => event.stopPropagation()}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault();
-                              const next = event.currentTarget.value.trim();
-                              setAliases((current) => {
-                                const copy = { ...current };
-                                if (next.length === 0) delete copy[group.repoId];
-                                else copy[group.repoId] = next;
-                                return copy;
-                              });
-                              setRenaming(null);
-                            }
-                            if (event.key === 'Escape') {
-                              event.preventDefault();
-                              setRenaming(null);
-                            }
-                          }}
-                          onBlur={(event) => {
-                            const next = event.currentTarget.value.trim();
-                            setAliases((current) => {
-                              const copy = { ...current };
-                              if (next.length === 0) delete copy[group.repoId];
-                              else copy[group.repoId] = next;
-                              return copy;
-                            });
-                            setRenaming(null);
-                          }}
-                          style={{
-                            flex: 1,
-                            minWidth: 0,
-                            font: 'inherit',
-                            fontWeight: 600,
-                            padding: '2px 6px',
-                          }}
-                        />
-                      ) : (
-                        <span
-                          title="Double-click or right-click to rename"
-                          onDoubleClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            setRenaming(group.repoId);
-                          }}
-                          onContextMenu={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            setRenaming(group.repoId);
-                          }}
-                          style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
-                        >
-                          {label}
-                        </span>
-                      )}
-                      {groupBranch ? (
-                        <span className="branch-tail" title={groupBranch}>
-                          {groupBranch}
-                        </span>
-                      ) : null}
-                      <button
-                        title="New chat"
-                        onClick={() =>
-                          void openDraftTab({
-                            repoId: group.repoId,
-                            path: repo?.repoId === group.repoId ? repo.path : undefined,
-                          })
-                        }
-                        style={{ marginLeft: 'auto', padding: '2px 8px' }}
-                      >
-                        +
-                      </button>
-                    </h2>
-                    )}
-                    {(hideRepoHead || !closed) &&
-                      group.chats.map((chat) => (
-                        <ChatRow
-                          key={chat.chatId}
-                          chat={chat}
-                          selected={selectedChat?.chatId === chat.chatId}
-                          onSelect={() => openLane(primaryLane(chat))}
-                          onMenu={(x, y) =>
-                            setMenu({ id: primaryLane(chat).task.id, x, y })
-                          }
-                        />
-                      ))}
-                  </section>
-                );
-              })}
-            </>
-          )}
-        </div>
-
-        <SidebarFoot
-          className="osade-foot"
-          working={working.length}
-          total={groups.length}
-          connected={connection === 'live'}
-          github={github.status}
-          onGithubSignedIn={(login) => github.setStatus({ signedIn: true, login })}
-        />
-      </main>
       )}
-
-      {showWorkspace && (
-        <>
-          {sidebarOpen && (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            aria-valuenow={Math.round(sidebarWidth)}
-            aria-valuemin={SIDEBAR_MIN}
-            aria-valuemax={SIDEBAR_MAX}
-            onPointerDown={onSidebarPointerDown}
-            onPointerMove={onSidebarPointerMove}
-            onPointerUp={onSidebarPointerUp}
-            onPointerCancel={onSidebarPointerUp}
-            onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
-            style={{
-              cursor: 'col-resize',
-              touchAction: 'none',
-              background: sidebarDrag
-                ? 'var(--focus)'
-                : 'linear-gradient(to right, transparent 2px, var(--line) 2px, var(--line) 3px, transparent 3px)',
-            }}
-          />
-          )}
+      {sidebarOpen && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          aria-valuenow={Math.round(sidebarWidth)}
+          aria-valuemin={SIDEBAR_MIN}
+          aria-valuemax={SIDEBAR_MAX}
+          onPointerDown={onSidebarPointerDown}
+          onPointerMove={onSidebarPointerMove}
+          onPointerUp={onSidebarPointerUp}
+          onPointerCancel={onSidebarPointerUp}
+          onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
+          style={{
+            cursor: 'col-resize',
+            touchAction: 'none',
+            background: sidebarDrag
+              ? 'var(--focus)'
+              : 'linear-gradient(to right, transparent 2px, var(--line) 2px, var(--line) 3px, transparent 3px)',
+          }}
+        />
+      )}
 
           <aside className="workspace" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0, height: '100%' }}>
         <TabStrip
@@ -1093,14 +1070,48 @@ export function App(): JSX.Element {
           onShowSidebar={() => setSidebarOpen(true)}
           onNew={() => void openDraftTab()}
           onCommand={() => setPalette(true)}
+          panelOpen={panelOpen}
+          onTogglePanel={() => setPanelOpen((open) => !open)}
           onSelect={(id) => {
             setActiveId(id);
-            setLane('transcript');
+            setView('list');
           }}
           onClose={closeTab}
         />
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          {!showDetail ? (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+          {/*
+            Terminal tabs stay mounted while you look elsewhere: the daemon hands each byte over
+            once, so unmounting the view would throw away the scrollback.
+          */}
+          {tabs.map((tab) =>
+            tab.kind === 'terminal' ? (
+              <div
+                key={tab.id}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  padding: '6px 0 0 10px',
+                  background: '#0f1214',
+                  visibility: showDetail && activeTab?.id === tab.id ? 'visible' : 'hidden',
+                }}
+              >
+                <ShellTerminal
+                  id={tab.id}
+                  cwd={tab.cwd}
+                  shell={tab.shell}
+                  visible={showDetail && activeTab?.id === tab.id}
+                />
+              </div>
+            ) : null,
+          )}
+          {view === 'board' ? (
+            <Board
+              chats={groups}
+              selectedId={selectedChat?.chatId ?? null}
+              onSelect={(chat) => openLane(primaryLane(chat))}
+              onMenu={(id, x, y) => setMenu({ id, x, y })}
+            />
+          ) : activeTab?.kind === 'terminal' && showDetail ? null : !showDetail ? (
             <NothingSelected
               hasChats={groups.length > 0}
               onNew={() => void openDraftTab()}
@@ -1123,8 +1134,9 @@ export function App(): JSX.Element {
                 const task = selectedChat.lanes.find((l) => l.task.id === id);
                 if (task) openLane(task);
               }}
-              lane={lane}
-              onLane={setLane}
+              panel={panel}
+              onPanel={openPanel}
+              panelHost={panelHost}
               catalog={catalog}
               optimistic={activeTab?.kind === 'chat' ? activeTab.optimistic : undefined}
               isolatedNotice={activeTab?.kind === 'chat' ? activeTab.isolatedNotice : undefined}
@@ -1199,8 +1211,6 @@ export function App(): JSX.Element {
           )}
         </div>
           </aside>
-        </>
-      )}
 
       {browserOpen && (
         <>
@@ -1235,6 +1245,50 @@ export function App(): JSX.Element {
         </>
       )}
 
+      {panelOpen && (
+        <>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize side panel"
+            aria-valuenow={Math.round(panelWidth)}
+            aria-valuemin={PANEL_MIN}
+            aria-valuemax={PANEL_MAX}
+            onPointerDown={onPanelPointerDown}
+            onPointerMove={onPanelPointerMove}
+            onPointerUp={onPanelPointerUp}
+            onPointerCancel={onPanelPointerUp}
+            onDoubleClick={() => setPanelWidth(PANEL_DEFAULT)}
+            style={{
+              cursor: 'col-resize',
+              touchAction: 'none',
+              background: panelDrag
+                ? 'var(--focus)'
+                : 'linear-gradient(to right, transparent 2px, var(--line) 2px, var(--line) 3px, transparent 3px)',
+            }}
+          />
+          {/* The open chat portals its Files, Checks, Changes, Rules and Notes in here. */}
+          <aside className="right-panel" ref={setPanelHost}>
+            {!detailShown && (
+              <>
+                <PanelTabs panel={panel} onPanel={setPanel} disabled />
+                <p className="right-panel-empty">Open a chat to see its files, checks and changes.</p>
+              </>
+            )}
+          </aside>
+        </>
+      )}
+      </div>
+
+      <StatusBar
+        summary={summarise({ needsYou: needsYou.length, working: working.length, total: groups.length })}
+        working={working.length}
+        total={groups.length}
+        connected={connection === 'live'}
+        github={github.status}
+        onGithubSignedIn={(login) => github.setStatus({ signedIn: true, login })}
+      />
+
       <CommandPalette
         open={palette}
         onClose={() => setPalette(false)}
@@ -1260,7 +1314,7 @@ export function App(): JSX.Element {
         onQuickNote={openCapture}
         onNotes={() => {
           setView('list');
-          setLane('notes');
+          openPanel('notes');
         }}
         onError={setActionError}
       />
@@ -1289,6 +1343,7 @@ export function App(): JSX.Element {
       {agentModal && (
         <AgentPicker
           agents={catalog}
+          shells={shells}
           defaultId={resolveNewChatAgent(null, defaultAgent)}
           repoName={
             agentModal.repoId != null
@@ -1298,6 +1353,7 @@ export function App(): JSX.Element {
               : null
           }
           onPick={(agentId) => openDraftWithAgent(agentModal, agentId)}
+          onPickShell={(shell) => openTerminal(agentModal, shell)}
           onClose={() => setAgentModal(null)}
         />
       )}
@@ -1328,6 +1384,8 @@ function TabStrip({
   onShowSidebar,
   onNew,
   onCommand,
+  panelOpen,
+  onTogglePanel,
   onSelect,
   onClose,
 }: {
@@ -1338,6 +1396,8 @@ function TabStrip({
   onShowSidebar?: () => void;
   onNew: () => void;
   onCommand: () => void;
+  panelOpen: boolean;
+  onTogglePanel: () => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
 }): JSX.Element {
@@ -1360,7 +1420,8 @@ function TabStrip({
       )}
       {tabs.map((tab) => {
         const chat = tab.kind === 'chat' ? groups.find((g) => g.chatId === tab.id) : null;
-        const title = tab.kind === 'draft' ? 'New chat' : (chat?.title ?? 'Chat');
+        const title =
+          tab.kind === 'draft' ? 'New chat' : tab.kind === 'terminal' ? tab.title : (chat?.title ?? 'Chat');
         const agentId =
           tab.kind === 'draft' ? tab.agentId : chat ? primaryLane(chat).agentId : null;
         const tone = chat ? STATUS[chat.status].tone : tab.kind === 'draft' ? 'needs' : 'rest';
@@ -1374,7 +1435,9 @@ function TabStrip({
             className="osade-tab"
             onClick={() => onSelect(tab.id)}
           >
-            {agentId ? (
+            {tab.kind === 'terminal' ? (
+              <ShellIcon shell={tab.shell} size={14} />
+            ) : agentId ? (
               <AgentMark name={agentId} size={14} />
             ) : (
               <span className="session-dot" data-tone={tone} />
@@ -1423,198 +1486,19 @@ function TabStrip({
         <span>Command</span>
         <kbd>{chord('k')}</kbd>
       </button>
-    </div>
-  );
-}
-
-function ChatRow({
-  chat,
-  selected,
-  onSelect,
-  onMenu,
-}: {
-  chat: ChatGroup;
-  selected: boolean;
-  onSelect: () => void;
-  onMenu: (x: number, y: number) => void;
-}): JSX.Element {
-  const copy = STATUS[chat.status];
-  const colour = TONE_COLOUR[copy.tone];
-  const primary = primaryLane(chat);
-  const stacked = chat.lanes.length > 1;
-  const behind = stacked ? chat.lanes[1] : null;
-  const branch = displayBranch(primary.branch);
-  const age = ago(chatActivity(chat));
-  const extraLanes = chat.lanes.length - 3;
-
-  return (
-    <div
-      data-task-id={primary.task.id}
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
-      className="ledger-row"
-      onClick={onSelect}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        onMenu(event.clientX, event.clientY);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '3px 22px minmax(0, 1fr)',
-        gridTemplateRows: 'auto auto',
-        columnGap: 9,
-        rowGap: 3,
-        alignItems: 'center',
-        minHeight: 52,
-        padding: '8px 12px 8px 10px',
-        borderBottom: '0.5px solid var(--line)',
-        cursor: 'default',
-      }}
-    >
-      <span
-        style={{
-          gridColumn: 1,
-          gridRow: '1 / 3',
-          background: colour,
-          alignSelf: 'stretch',
-          borderRadius: 2,
-          opacity: copy.tone === 'rest' ? 0.35 : 1,
-        }}
-        aria-hidden="true"
-      />
-      <span
-        style={{
-          gridColumn: 2,
-          gridRow: '1 / 3',
-          position: 'relative',
-          width: 22,
-          height: 22,
-          flexShrink: 0,
-        }}
-        aria-hidden="true"
+      <button
+        type="button"
+        className="tab-panel-toggle"
+        onClick={onTogglePanel}
+        aria-pressed={panelOpen}
+        title={panelOpen ? 'Hide side panel' : 'Show side panel'}
+        aria-label={panelOpen ? 'Hide side panel' : 'Show side panel'}
       >
-        {behind && (
-          <span
-            style={{
-              position: 'absolute',
-              right: -2,
-              bottom: -2,
-              width: 15,
-              height: 15,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'var(--bg-2)',
-              border: '1px solid var(--bg-1)',
-              borderRadius: 3,
-            }}
-          >
-            <AgentMark name={behind.agentId} size={13} />
-          </span>
-        )}
-        <span
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            width: 17,
-            height: 17,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'var(--bg-2)',
-            border: '1px solid var(--line)',
-            borderRadius: 3,
-          }}
-        >
-          <AgentMark name={primary.agentId} size={15} />
-        </span>
-      </span>
-      <div
-        style={{
-          gridColumn: 3,
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 8,
-          minWidth: 0,
-        }}
-      >
-        <div
-          title={chatLabel(chat)}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontSize: '13px',
-            fontWeight: selected ? 600 : 500,
-            lineHeight: 1.3,
-            color: 'var(--ink)',
-          }}
-        >
-          {chatLabel(chat)}
-        </div>
-        {age && (
-          <span
-            className="mono"
-            style={{
-              flexShrink: 0,
-              fontSize: '11px',
-              color: 'var(--ink-3)',
-              lineHeight: 1.3,
-            }}
-          >
-            {age}
-          </span>
-        )}
-      </div>
-      <div
-        style={{
-          gridColumn: 3,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          minWidth: 0,
-        }}
-      >
-        <span className="branch-clip" title={primary.branch} style={{ fontSize: '11px' }}>
-          <span>{branch}</span>
-        </span>
-        {stacked && (
-          <span
-            style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}
-            title={chat.lanes.map((lane) => lane.agentId).join(', ')}
-          >
-            {chat.lanes.slice(0, 3).map((lane) => (
-              <span
-                key={lane.task.id}
-                style={{
-                  width: 12,
-                  height: 12,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <AgentMark name={lane.agentId} size={12} />
-              </span>
-            ))}
-            {extraLanes > 0 && (
-              <span className="mono" style={{ fontSize: 'var(--t-xs)', color: 'var(--ink-3)' }}>
-                {chat.lanes.length}
-              </span>
-            )}
-          </span>
-        )}
-      </div>
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+          <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
+          <path d="M10 2.5v11" />
+        </svg>
+      </button>
     </div>
   );
 }
@@ -1673,329 +1557,6 @@ function RowMenu({
   );
 }
 
-function Header({
-  repo,
-  branch,
-  summary,
-  view,
-  onView,
-  browserOpen,
-  onBrowser,
-  onNew,
-  onSearch,
-  onHide,
-  settings,
-}: {
-  repo: { name: string; slug: string | null } | null;
-  branch?: string | null;
-  summary: string;
-  view: 'list' | 'board';
-  onView: (view: 'list' | 'board') => void;
-  browserOpen: boolean;
-  onBrowser: () => void;
-  onNew: () => void;
-  onSearch: () => void;
-  onHide?: () => void;
-  settings: JSX.Element | null;
-}): JSX.Element {
-  return (
-    <header
-      style={{
-        padding: '12px 14px 10px 14px',
-        borderBottom: '1px solid var(--line)',
-        background: 'var(--bg-1)',
-        minWidth: 0,
-      }}
-    >
-      <div className="osade-brand">
-        <div className="osade-mark" title="Osade">
-          <img src={osadeLogo} alt="Osade" className="osade-logo" />
-        </div>
-        {onHide && (
-          <button
-            type="button"
-            className="osade-hide-btn"
-            onClick={onHide}
-            aria-label="Hide sidebar"
-            title="Hide sidebar"
-          >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-              <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
-              <path d="M6 2.5v11" />
-            </svg>
-            <span>Hide</span>
-          </button>
-        )}
-      </div>
-      <div className="osade-repo-row">
-        <svg className="repo-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-          <path d="M2 3.5h4.5l1.5 2H14v7.5H2z" />
-        </svg>
-        <div className="osade-repo" title={repo?.slug ?? repo?.name ?? 'Osade'}>
-          {repo ? repo.name : 'No repository'}
-        </div>
-        {branch ? (
-          <span className="branch-tail" title={branch}>
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-              <circle cx="4" cy="4" r="2" />
-              <circle cx="4" cy="12" r="2" />
-              <circle cx="12" cy="7" r="2" />
-              <path d="M4 6v4M4 8a4 4 0 0 1 4-4h2" />
-            </svg>
-            <span>{branch}</span>
-          </span>
-        ) : null}
-      </div>
-      <div className="osade-summary">{summary}</div>
-      <button
-        data-new-task
-        onClick={onNew}
-        className="primary osade-new-chat-btn"
-        title={`New chat (${chord('t')})`}
-      >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-          <path d="M8 3.5v9M3.5 8h9" />
-        </svg>
-        <span>New chat</span>
-        <kbd>{chord('t')}</kbd>
-      </button>
-      <div className="osade-actions">
-        <button
-          type="button"
-          className="osade-action-btn"
-          onClick={onSearch}
-          title={`Search chats (${chord('k')})`}
-          aria-label="Search chats"
-        >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-            <circle cx="7" cy="7" r="4.5" />
-            <path d="M10.5 10.5 14 14" />
-          </svg>
-          <span className="osade-action-label">Search</span>
-        </button>
-        <button
-          type="button"
-          className="osade-action-btn"
-          title={view === 'board' ? 'Switch to List view' : 'Switch to Kanban board'}
-          aria-label={view === 'board' ? 'Switch to List view' : 'Switch to Kanban board'}
-          onClick={() => onView(view === 'board' ? 'list' : 'board')}
-        >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-            {view === 'board' ? <path d="M3 4.5h10M3 8h10M3 11.5h10" /> : <path d="M3 3h4v10H3zM9 3h4v6H9z" />}
-          </svg>
-          <span className="osade-action-label">{view === 'board' ? 'List' : 'Kanban'}</span>
-        </button>
-        <button
-          type="button"
-          className="osade-action-btn"
-          aria-pressed={browserOpen}
-          title={`Browser view (${chord('b')})`}
-          aria-label="Browser view"
-          onClick={onBrowser}
-        >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-            <rect x="2" y="3" width="12" height="10" rx="1.5" />
-            <path d="M2 6h12" />
-          </svg>
-          <span className="osade-action-label">Browser</span>
-        </button>
-        {settings}
-      </div>
-    </header>
-  );
-}
-
-function SidebarFoot({
-  working,
-  total,
-  connected,
-  github,
-  onGithubSignedIn,
-  className,
-}: {
-  working: number;
-  total: number;
-  connected: boolean;
-  github: { signedIn: boolean; login: string | null };
-  onGithubSignedIn: (login: string) => void;
-  className?: string;
-}): JSX.Element {
-  return (
-    <div className={className} style={{ position: 'relative', background: 'var(--bg-1)' }}>
-      <div className="status-dock" aria-label="Application status">
-        <DockRow
-          icon="agents"
-          label="Agents"
-          value={working === 0 ? 'Idle' : `${working} running`}
-          tone={working === 0 ? 'var(--ink-3)' : 'var(--st-live)'}
-          statusDot={working > 0 ? 'live' : 'idle'}
-        />
-        <DockRow
-          icon="chats"
-          label="Chats"
-          value={String(total)}
-        />
-        <DockRow
-          icon="daemon"
-          label="Daemon"
-          value={connected ? 'Connected' : 'Reconnecting'}
-          tone={connected ? 'var(--st-live)' : 'var(--st-fail)'}
-          statusDot={connected ? 'live' : 'fail'}
-        />
-        {github.signedIn ? (
-          <DockRow
-            icon="github"
-            label="GitHub"
-            value={github.login ?? 'Signed in'}
-            tone="var(--ink)"
-            statusDot="live"
-          />
-        ) : (
-          <details>
-            <summary className="dock-row">
-              <div className="dock-row-lead">
-                <DockIcon name="github" />
-                <span className="dock-label">GitHub</span>
-              </div>
-              <div className="dock-row-val">
-                <span className="dock-badge-action">Sign in</span>
-              </div>
-            </summary>
-            <div
-              style={{
-                position: 'absolute',
-                left: 8,
-                right: 8,
-                bottom: '100%',
-                marginBottom: 6,
-                zIndex: 20,
-                background: 'var(--bg-1)',
-                border: '0.5px solid var(--line)',
-                borderRadius: 'var(--radius)',
-                padding: 12,
-                boxShadow: '0 4px 14px rgba(0, 0, 0, 0.4)',
-              }}
-            >
-              <GitHubSignIn status={github} onSignedIn={onGithubSignedIn} />
-            </div>
-          </details>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DockRow({
-  icon,
-  label,
-  value,
-  tone,
-  statusDot,
-}: {
-  icon: 'agents' | 'chats' | 'daemon' | 'github';
-  label: string;
-  value: string;
-  tone?: string;
-  statusDot?: 'live' | 'fail' | 'idle';
-}): JSX.Element {
-  return (
-    <div className="dock-row">
-      <div className="dock-row-lead">
-        <DockIcon name={icon} />
-        <span className="dock-label">{label}</span>
-      </div>
-      <div className="dock-row-val">
-        {statusDot && (
-          <span
-            className={`dock-status-dot ${statusDot === 'live' ? 'dock-status-live' : ''}`}
-            data-tone={statusDot}
-            aria-hidden="true"
-          />
-        )}
-        <span className="dock-value" style={{ color: tone }}>{value}</span>
-      </div>
-    </div>
-  );
-}
-
-function DockIcon({ name }: { name: 'agents' | 'chats' | 'daemon' | 'github' }): JSX.Element {
-  const common = {
-    className: 'dock-ico',
-    viewBox: '0 0 16 16',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.5,
-    'aria-hidden': true as const,
-  };
-  if (name === 'chats') {
-    return (
-      <svg {...common}>
-        <path d="M2.5 4h11v6.2H5.8L2.5 13z" />
-      </svg>
-    );
-  }
-  if (name === 'daemon') {
-    return (
-      <svg {...common}>
-        <rect x="2.5" y="3" width="11" height="4.5" rx="1" />
-        <rect x="2.5" y="9" width="11" height="4.5" rx="1" />
-        <circle cx="5" cy="5.25" r="0.8" fill="currentColor" />
-        <circle cx="5" cy="11.25" r="0.8" fill="currentColor" />
-      </svg>
-    );
-  }
-  if (name === 'github') {
-    return (
-      <svg {...common} fill="currentColor" stroke="none">
-        <path d="M8 2.2a5.8 5.8 0 0 0-1.83 11.3c.29.05.4-.12.4-.28v-1.02c-1.62.35-1.96-.7-1.96-.7-.26-.67-.64-.85-.64-.85-.53-.36.04-.35.04-.35.58.04.89.6.89.6.52.88 1.36.63 1.69.48.05-.38.2-.63.37-.78-1.3-.15-2.66-.65-2.66-2.9 0-.64.23-1.16.6-1.57-.06-.15-.26-.75.06-1.56 0 0 .5-.16 1.62.6a5.6 5.6 0 0 1 2.94 0c1.12-.76 1.62-.6 1.62-.6.32.81.12 1.41.06 1.56.38.41.6.93.6 1.57 0 2.26-1.37 2.75-2.67 2.9.21.18.4.53.4 1.07v1.58c0 .16.1.34.4.28A5.8 5.8 0 0 0 8 2.2z" />
-      </svg>
-    );
-  }
-  return (
-    <svg {...common}>
-      <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
-      <circle cx="8" cy="8" r="1.5" fill="currentColor" />
-      <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2" />
-    </svg>
-  );
-}
-
-function Empty({
-  connection,
-  repo,
-  onNew,
-}: {
-  connection: string;
-  repo: { name: string } | null;
-  onNew: () => void;
-}): JSX.Element {
-  if (connection !== 'live') {
-    return (
-      <div style={{ padding: '48px 28px', maxWidth: 480 }}>
-        <p style={{ marginTop: 0, fontSize: 'var(--t-l)', fontWeight: 600 }}>Connecting to the daemon…</p>
-        <p style={{ color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 0 }}>
-          Agents keep running while this window is closed, so nothing has been lost. This should
-          only take a moment.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ padding: '48px 28px', maxWidth: 520 }}>
-      <p style={{ marginTop: 0, fontSize: 'var(--t-l)', fontWeight: 600 }}>
-        {repo ? `No chats in ${repo.name} yet` : 'No chats yet'}
-      </p>
-      <p style={{ color: 'var(--ink-2)', lineHeight: 1.5 }}>
-        {attachCheckoutHint()} {isolatedWorktreeHint()} Osade stops before anything is published.
-      </p>
-      <button className="primary" onClick={onNew} style={{ marginTop: 4 }}>
-        New chat
-      </button>
-    </div>
-  );
-}
-
 function NothingSelected({
   hasChats,
   onNew,
@@ -2028,12 +1589,6 @@ function NothingSelected({
               Search <kbd>{chord('k')}</kbd>
             </button>
           )}
-        </div>
-        <div className="workspace-empty-agents">
-          <span>@claude</span>
-          <span>@codex</span>
-          <span>@opencode</span>
-          <span>@pi</span>
         </div>
       </div>
     </div>
@@ -2138,6 +1693,24 @@ function clampBrowser(n: number): number {
   return clampBrowserWidth(n, typeof window === 'undefined' ? BROWSER_MAX : window.innerWidth);
 }
 
+function loadPanelWidth(): number {
+  try {
+    const raw = localStorage.getItem(PANEL_WIDTH_KEY);
+    if (raw != null && raw.trim() !== '') {
+      const n = Number(raw);
+      if (Number.isFinite(n)) return clampPanel(n);
+    }
+  } catch {
+    // localStorage can throw in a private session.
+  }
+  return PANEL_DEFAULT;
+}
+
+function clampPanel(n: number): number {
+  const room = typeof window === 'undefined' ? PANEL_MAX : window.innerWidth - 480;
+  return clamp(n, PANEL_MIN, Math.min(PANEL_MAX, Math.max(PANEL_MIN, room)));
+}
+
 function loadAliases(): Record<string, string> {
   try {
     const raw = JSON.parse(localStorage.getItem(NAMES_KEY) ?? '{}') as unknown;
@@ -2191,20 +1764,21 @@ function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-function groupHeadStyle(color: string): CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    position: 'sticky',
-    top: 0,
-    zIndex: 1,
-    margin: 0,
-    padding: '8px 12px 8px 16px',
-    fontSize: 'var(--t-xs)',
-    fontWeight: 600,
-    color,
-    background: 'var(--bg-1)',
-    borderBottom: '0.5px solid var(--line)',
-  };
+/** The shells the daemon can open here; empty until it answers, so the menu shows agents only. */
+function useShellOptions(live: boolean): ShellOption[] {
+  const [shells, setShells] = useState<ShellOption[]>([]);
+  useEffect(() => {
+    if (!live) return;
+    let stale = false;
+    void api.terminalShells().then(
+      (next) => {
+        if (!stale) setShells(next);
+      },
+      () => undefined,
+    );
+    return () => {
+      stale = true;
+    };
+  }, [live]);
+  return shells;
 }

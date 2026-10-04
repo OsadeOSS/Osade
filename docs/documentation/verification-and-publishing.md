@@ -29,13 +29,13 @@ request approval.
 
 ## Review the diff
 
-The Diff view separates uncommitted working-tree changes from committed but unpushed changes. It
+The Changes view in the side panel separates uncommitted working-tree changes from committed but unpushed changes. It
 shows each changed file, insertion/deletion counts, outgoing commits, and a unified diff. Select a
 hunk or individual lines and ask an agent about exactly that change.
 
 ## Prepare a pull request
 
-Expand **Open pull request** in Diff or choose **Request pull request** from the command center.
+Expand **Open pull request** in Changes or choose **Request pull request** from the command center.
 For a multi-agent conversation, select which lane owns the branch. Review the target repository,
 base and head branches, title, body, and draft setting.
 

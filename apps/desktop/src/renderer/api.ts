@@ -8,6 +8,9 @@
 
 import type { ConventionImpact, ConventionView, MineStatus, QuickNoteView } from '@osade/contract';
 
+/** A standalone terminal's shell; `default` is PowerShell on Windows, $SHELL elsewhere. */
+export type ShellKind = 'default' | 'powershell' | 'cmd' | 'gitbash';
+
 let cachedBase: string | null = null;
 
 async function base(): Promise<string> {
@@ -295,6 +298,17 @@ export const api = {
     call('mutation', 'taskShellWrite', { taskId, data }) as Promise<{ ok: true }>,
   taskShellResize: (taskId: string, cols: number, rows: number) =>
     call('mutation', 'taskShellResize', { taskId, cols, rows }) as Promise<{ ok: true }>,
+
+  terminalShells: () =>
+    call('query', 'terminalShells') as Promise<{ kind: ShellKind; label: string }[]>,
+  terminalOpen: (id: string, cwd: string, shell: ShellKind, size?: { cols: number; rows: number }) =>
+    call('mutation', 'terminalOpen', { id, cwd, shell, ...size }) as Promise<{ cwd: string }>,
+  terminalRead: (id: string) => call('query', 'terminalRead', { id }) as Promise<{ text: string }>,
+  terminalWrite: (id: string, data: string) =>
+    call('mutation', 'terminalWrite', { id, data }) as Promise<{ ok: true }>,
+  terminalResize: (id: string, cols: number, rows: number) =>
+    call('mutation', 'terminalResize', { id, cols, rows }) as Promise<{ ok: true }>,
+  terminalClose: (id: string) => call('mutation', 'terminalClose', { id }) as Promise<{ ok: true }>,
 
   taskFsList: (taskId: string, dirs?: string[]) =>
     call('query', 'taskFsList', { taskId, dirs }) as Promise<{

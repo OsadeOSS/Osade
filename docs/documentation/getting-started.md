@@ -50,8 +50,12 @@ from the desktop app's folder picker.
 ## Start a session
 
 1. Select **New chat** or press `Ctrl+T` on Windows/Linux or `Cmd+T` on macOS.
-2. Choose an installed agent.
+2. Choose an installed agent from the menu. Type to filter it, use the arrow keys to move, and press
+   Enter to pick.
 3. Describe the outcome you want and press Enter.
+
+The same menu lists plain terminals above the agents. Picking one opens a terminal tab in the
+repository folder instead of a chat — see [Terminal tabs](agents-and-conversations.md#terminal-tabs).
 
 The first chat can work on the repository's current checkout. Osade shows the active agent,
 branch, status, and workspace views beside the transcript. Additional chats and additional agents

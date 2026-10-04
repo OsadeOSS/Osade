@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { defaultShell, TaskShells } from '../../src/domain/task-shell.js';
+import { availableShells, defaultShell, TaskShells } from '../../src/domain/task-shell.js';
 
 let dir: string;
 let shells: TaskShells;
@@ -72,4 +72,25 @@ describe('TaskShells', () => {
     shells.open('t1', dir);
     expect(shells.open('t1', dir)).toBe(dir);
   });
+
+  it('offers PowerShell and CMD on Windows, and one login shell elsewhere', () => {
+    const kinds = availableShells().map((s) => s.kind);
+    if (process.platform === 'win32') {
+      expect(kinds.slice(0, 2)).toEqual(['powershell', 'cmd']);
+    } else {
+      expect(kinds).toEqual(['default']);
+    }
+  });
+
+  it('opens the picked shell', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'osade-shell-'));
+    shells = new TaskShells();
+    const kind = process.platform === 'win32' ? 'cmd' : 'default';
+    shells.open('t1', dir, { cols: 80, rows: 24 }, kind);
+    // cmd's caret escape (and printf's split) keep the echoed command line from satisfying waitFor.
+    shells.write('t1', process.platform === 'win32' ? 'echo OSADE_CMD^_OK\r' : 'printf %s%s OSADE_CMD _OK\r');
+    const out = await waitFor('OSADE_CMD_OK');
+    expect(out).toContain('OSADE_CMD_OK');
+  });
 });
+

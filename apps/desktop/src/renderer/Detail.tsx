@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { VerifyRun } from '@osade/contract';
 
@@ -31,6 +32,8 @@ import { Transcript } from './Transcript.js';
 import { VerifyPlanReview } from './VerifyPlanReview.js';
 
 export type Lane = 'transcript' | 'files' | 'checks' | 'diff' | 'rules' | 'notes';
+/** A view in the right-hand panel; the chat itself always holds the centre. */
+export type PanelLane = Exclude<Lane, 'transcript'>;
 
 /**
  * Issue #19 — the file a quick note is about.
@@ -44,11 +47,10 @@ export interface FileContext {
   line: number | null;
 }
 
-const PANES: { id: Lane; label: string; chord: string }[] = [
-  { id: 'transcript', label: 'Chat', chord: '1' },
+export const PANES: { id: PanelLane; label: string; chord: string }[] = [
   { id: 'files', label: 'Files', chord: '2' },
   { id: 'checks', label: 'Checks', chord: '3' },
-  { id: 'diff', label: 'Diff', chord: '4' },
+  { id: 'diff', label: 'Changes', chord: '4' },
   { id: 'rules', label: 'Rules', chord: '5' },
   { id: 'notes', label: 'Notes', chord: '6' },
 ];
@@ -57,8 +59,9 @@ export function Detail({
   chat,
   focusId,
   onFocus,
-  lane,
-  onLane,
+  panel,
+  onPanel,
+  panelHost,
   catalog,
   optimistic,
   isolatedNotice,
@@ -77,8 +80,10 @@ contextRepos = [],
   chat: ChatGroup;
   focusId: string;
   onFocus: (taskId: string) => void;
-  lane: Lane;
-  onLane: (lane: Lane) => void;
+  panel: PanelLane;
+  onPanel: (panel: PanelLane) => void;
+  /** The right-hand panel's element; this chat's Files, Changes, Checks, Rules and Notes go there. */
+  panelHost: HTMLElement | null;
   catalog: CatalogAgent[];
   optimistic?: string;
   isolatedNotice?: string;
@@ -102,7 +107,6 @@ contextRepos?: ContextRepo[];
   const [openedTerminal, setOpenedTerminal] = useState<string | null>(null);
   const [laneAttach, setLaneAttach] = useState<ComposerAttach | null>(null);
   const [attachDismissed, setAttachDismissed] = useState(false);
-  const [modHeld, setModHeld] = useState(false);
   const [branchOfferDismissed, setBranchOfferDismissed] = useState(false);
   /** Issue #19 — a note's file and line, to open in the Files lane when the note is clicked. */
   const [noteTarget, setNoteTarget] = useState<{ file: string; line: number | null; n: number } | null>(
@@ -114,7 +118,7 @@ contextRepos?: ContextRepo[];
    * Held here rather than in a module-level event because this component knows the two things
    * that make the answer true: which lane is focused, and which task it belongs to. A note is
    * only about a file if that file was on screen when the note was written, and `Files`
-   * unmounting on `{lane === 'files' && …}` is exactly the moment that stops being true.
+   * unmounting on `{panel === 'files' && …}` is exactly the moment that stops being true.
    */
   const [fileContext, setFileContext] = useState<FileContext | null>(null);
   const focused = chat.lanes.find((t) => t.task.id === focusId) ?? chat.lanes[0]!;
@@ -132,7 +136,7 @@ contextRepos?: ContextRepo[];
   }, [fileContext, onFileContextChange]);
   const rememberedTerminal = nextOpenedTerminal(openedTerminal, focused.task.id, chatSurface);
   if (rememberedTerminal !== openedTerminal) setOpenedTerminal(rememberedTerminal);
-  const terminalVisible = terminalSurfaceVisible(lane, chatSurface);
+  const terminalVisible = terminalSurfaceVisible('transcript', chatSurface);
   const keepTerminal = retainLaneTerminal(rememberedTerminal, focused.task.id);
   const copy = statusCopyFor(chat.status, focused.agent?.external_block);
   const colour = TONE_COLOUR[copy.tone];
@@ -155,25 +159,9 @@ contextRepos?: ContextRepo[];
     chat.status === 'review_changes_requested' && prBranch != null && !hasLaneOnPr;
 
   useEffect(() => {
-    function onKey(event: KeyboardEvent): void {
-      setModHeld(event.metaKey || event.ctrlKey);
-    }
-    function onUp(event: KeyboardEvent): void {
-      if (!event.metaKey && !event.ctrlKey) setModHeld(false);
-    }
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('keyup', onUp);
-    window.addEventListener('blur', () => setModHeld(false));
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('keyup', onUp);
-    };
-  }, []);
-
-  useEffect(() => {
     setAttachDismissed(false);
     setLaneAttach(null);
-  }, [lane, focused.task.id]);
+  }, [panel, focused.task.id]);
 
   async function handleSend(text: string, photos: ComposerPhoto[] = []): Promise<void> {
     const match = text.match(/^\/branch(?:\s+(.*))?$/iu);
@@ -186,8 +174,7 @@ contextRepos?: ContextRepo[];
       });
       return;
     }
-    const payload =
-      lane === 'transcript' || attachDismissed ? text : prependAttach(text, laneAttach);
+    const payload = attachDismissed ? text : prependAttach(text, laneAttach);
     await onSend(payload, photos);
   }
 
@@ -349,62 +336,26 @@ contextRepos?: ContextRepo[];
         </section>
       )}
 
-      <nav className="workspace-tabs" aria-label="Workspace views">
-        {PANES.map((item) => {
-          const selected = lane === item.id;
-          const count =
-            item.id === 'transcript'
-              ? openGates.length
-              : item.id === 'checks'
-                ? failingChecks
-                : 0;
-          return (
-            <button
-              key={item.id}
-              data-lane={item.id}
-              role="tab"
-              aria-selected={selected}
-              className="workspace-tab"
-              onClick={() => onLane(item.id)}
-            >
-              <LaneIcon id={item.id} />
-              {item.label}
-              {count > 0 ? (
-                <span className="lane-count">{count}</span>
-              ) : (
-                modHeld && (
-                  <kbd style={{ border: 'none', padding: 0, color: 'var(--ink-3)' }}>
-                    ⌘{item.chord}
-                  </kbd>
-                )
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
       <div
-        data-chat-scroll={lane === 'transcript' && chatSurface === 'chat' ? '' : undefined}
+        data-chat-scroll={chatSurface === 'chat' ? '' : undefined}
         style={{
           flex: 1,
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
-          overflow: lane === 'files' || lane === 'diff' || terminalVisible ? 'hidden' : 'auto',
-          padding: lane === 'files' || lane === 'diff' || terminalVisible ? 0 : '32px 28px 40px',
+          overflow: terminalVisible ? 'hidden' : 'auto',
+          padding: terminalVisible ? 0 : '32px 28px 40px',
         }}
       >
-        {lane === 'transcript' && (
-          <div className="reading-tools" style={{ padding: terminalVisible ? '8px 12px 0' : 0 }}>
-            <FilterChip label="Chat" active={chatSurface === 'chat'} onClick={() => setChatSurface('chat')} />
-            <FilterChip
-              label="Terminal"
-              active={chatSurface === 'terminal'}
-              onClick={() => setChatSurface('terminal')}
-            />
-          </div>
-        )}
-        {lane === 'transcript' && chatSurface === 'chat' && (
+        <div className="reading-tools" style={{ padding: terminalVisible ? '8px 12px 0' : 0 }}>
+          <FilterChip label="Chat" active={chatSurface === 'chat'} onClick={() => setChatSurface('chat')} />
+          <FilterChip
+            label="Terminal"
+            active={chatSurface === 'terminal'}
+            onClick={() => setChatSurface('terminal')}
+          />
+        </div>
+        {chatSurface === 'chat' && (
           <>
             {chat.lanes.length > 1 && (
               <div className="reading-tools">
@@ -461,7 +412,7 @@ contextRepos?: ContextRepo[];
               pending={pending}
               onOpenDiff={(taskId) => {
                 onFocus(taskId);
-                onLane('diff');
+                onPanel('diff');
               }}
             />
           </>
@@ -478,45 +429,6 @@ contextRepos?: ContextRepo[];
             <LaneTerminal taskId={focused.task.id} visible={terminalVisible} />
           </div>
         )}
-        {lane === 'files' && (
-          <Files
-            key={focused.task.id}
-            task={focused}
-            onAttach={setLaneAttach}
-            openPath={noteTarget}
-            onOpenChange={setFileContext}
-            notesRevision={notesVersion}
-          />
-        )}
-        {lane === 'checks' && (
-          <>
-            <VerifyPlanReview
-              taskId={focused.task.id}
-              runs={focused.latestVerifyRuns}
-              onAttach={setLaneAttach}
-            />
-            <VerifyRuns runs={focused.latestVerifyRuns} />
-          </>
-        )}
-        {lane === 'diff' && (
-          <Changes key={focused.task.id} task={focused} lanes={chat.lanes} onAttach={setLaneAttach} />
-        )}
-        {lane === 'rules' && (
-          <Conventions repoId={focused.task.repo_id} onAttach={setLaneAttach} />
-        )}
-        {lane === 'notes' && (
-          <QuickNotes
-            repoId={focused.task.repo_id}
-            refreshKey={notesVersion}
-            onCapture={onCaptureNote}
-            onOpenFile={(file, line) => {
-              // `n` is a counter, not a flag: clicking the same note twice has to open it
-              // twice, and a file path alone would look unchanged the second time.
-              setNoteTarget({ file, line, n: (noteTarget?.n ?? 0) + 1 });
-              onLane('files');
-            }}
-          />
-        )}
       </div>
 
       {!terminalVisible && (
@@ -531,9 +443,9 @@ contextRepos?: ContextRepo[];
         )}
       <Composer
         key={chat.chatId}
-        autoFocus={lane === 'transcript'}
+        autoFocus
         catalog={catalog}
-        attach={!attachDismissed && lane !== 'transcript' ? laneAttach : null}
+        attach={!attachDismissed ? laneAttach : null}
         onDismissAttach={() => setAttachDismissed(true)}
         held={
           focused.status === 'implementing' ||
@@ -545,7 +457,100 @@ contextRepos?: ContextRepo[];
       />
       </>
       )}
+
+      {panelHost &&
+        createPortal(
+          <>
+            <PanelTabs panel={panel} onPanel={onPanel} counts={{ checks: failingChecks }} />
+            <div
+              className="right-panel-body"
+              style={{
+                overflow: panel === 'files' || panel === 'diff' ? 'hidden' : 'auto',
+                padding: panel === 'files' || panel === 'diff' ? 0 : 16,
+              }}
+            >
+              {panel === 'files' && (
+                <Files
+                  key={focused.task.id}
+                  task={focused}
+                  onAttach={setLaneAttach}
+                  openPath={noteTarget}
+                  onOpenChange={setFileContext}
+                  notesRevision={notesVersion}
+                />
+              )}
+              {panel === 'checks' && (
+                <>
+                  <VerifyPlanReview
+                    taskId={focused.task.id}
+                    runs={focused.latestVerifyRuns}
+                    onAttach={setLaneAttach}
+                  />
+                  <VerifyRuns runs={focused.latestVerifyRuns} />
+                </>
+              )}
+              {panel === 'diff' && (
+                <Changes key={focused.task.id} task={focused} lanes={chat.lanes} onAttach={setLaneAttach} />
+              )}
+              {panel === 'rules' && (
+                <Conventions repoId={focused.task.repo_id} onAttach={setLaneAttach} />
+              )}
+              {panel === 'notes' && (
+                <QuickNotes
+                  repoId={focused.task.repo_id}
+                  refreshKey={notesVersion}
+                  onCapture={onCaptureNote}
+                  onOpenFile={(file, line) => {
+                    // `n` is a counter, not a flag: clicking the same note twice has to open it
+                    // twice, and a file path alone would look unchanged the second time.
+                    setNoteTarget({ file, line, n: (noteTarget?.n ?? 0) + 1 });
+                    onPanel('files');
+                  }}
+                />
+              )}
+            </div>
+          </>,
+          panelHost,
+        )}
     </div>
+  );
+}
+
+/** The right panel's icon row: Files, Checks, Changes, Rules, Notes. */
+export function PanelTabs({
+  panel,
+  onPanel,
+  counts = {},
+  disabled = false,
+}: {
+  panel: PanelLane;
+  onPanel: (panel: PanelLane) => void;
+  counts?: Partial<Record<PanelLane, number>>;
+  disabled?: boolean;
+}): JSX.Element {
+  return (
+    <nav className="panel-tabs" role="tablist" aria-label="Session views">
+      {PANES.map((item) => {
+        const count = counts[item.id] ?? 0;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            data-lane={item.id}
+            role="tab"
+            aria-selected={!disabled && panel === item.id}
+            aria-label={item.label}
+            title={`${item.label} (${item.chord})`}
+            className="panel-tab"
+            disabled={disabled}
+            onClick={() => onPanel(item.id)}
+          >
+            <LaneIcon id={item.id} />
+            {count > 0 && <span className="lane-count">{count}</span>}
+          </button>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -677,7 +682,10 @@ function LaneIcon({ id }: { id: Lane }): JSX.Element {
   if (id === 'diff') {
     return (
       <svg {...common}>
-        <path d="M5 3.5v9M11 3.5v9M5 8h6" />
+        <circle cx="4.5" cy="3.5" r="1.5" />
+        <circle cx="4.5" cy="12.5" r="1.5" />
+        <circle cx="11.5" cy="5.5" r="1.5" />
+        <path d="M4.5 5v6M11.5 7c0 2.5-2 3-7 4" />
       </svg>
     );
   }
