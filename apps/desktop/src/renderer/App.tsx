@@ -810,8 +810,9 @@ export function App(): JSX.Element {
       style={{
         display: 'grid',
         gridTemplateColumns: [
-          showDetail ? `${sidebarWidth}px` : null,
-          showDetail ? '6px' : null,
+          // Must mirror the children rendered below, or the grid wraps them into rows.
+          showWorkspace && sidebarOpen ? `${sidebarWidth}px` : null,
+          showWorkspace && sidebarOpen ? '6px' : null,
           'minmax(0, 1fr)',
           browserOpen ? '6px' : null,
           browserOpen ? `${browserWidth}px` : null,
@@ -1721,60 +1722,60 @@ function Header({
         ) : null}
       </div>
       <div className="osade-summary">{summary}</div>
+      <button
+        data-new-task
+        onClick={onNew}
+        className="primary osade-new-chat-btn"
+        title={`New chat (${chord('t')})`}
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <path d="M8 3.5v9M3.5 8h9" />
+        </svg>
+        <span>New chat</span>
+        <kbd>{chord('t')}</kbd>
+      </button>
       <div className="osade-actions">
-        <button type="button" className="osade-action-btn" onClick={onSearch} title="Search chats">
+        <button
+          type="button"
+          className="osade-action-btn"
+          onClick={onSearch}
+          title={`Search chats (${chord('k')})`}
+          aria-label="Search chats"
+        >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
             <circle cx="7" cy="7" r="4.5" />
             <path d="M10.5 10.5 14 14" />
           </svg>
-          <span>Search</span>
-          <kbd>{chord('k')}</kbd>
+          <span className="osade-action-label">Search</span>
         </button>
         <button
           type="button"
           className="osade-action-btn"
           title={view === 'board' ? 'Switch to List view' : 'Switch to Kanban board'}
+          aria-label={view === 'board' ? 'Switch to List view' : 'Switch to Kanban board'}
           onClick={() => onView(view === 'board' ? 'list' : 'board')}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
             {view === 'board' ? <path d="M3 4.5h10M3 8h10M3 11.5h10" /> : <path d="M3 3h4v10H3zM9 3h4v6H9z" />}
           </svg>
-          <span>{view === 'board' ? 'List' : 'Kanban'}</span>
+          <span className="osade-action-label">{view === 'board' ? 'List' : 'Kanban'}</span>
+        </button>
+        <button
+          type="button"
+          className="osade-action-btn"
+          aria-pressed={browserOpen}
+          title={`Browser view (${chord('b')})`}
+          aria-label="Browser view"
+          onClick={onBrowser}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+            <rect x="2" y="3" width="12" height="10" rx="1.5" />
+            <path d="M2 6h12" />
+          </svg>
+          <span className="osade-action-label">Browser</span>
         </button>
         {settings}
-        <button data-new-task onClick={onNew} className="primary osade-new-chat-btn" title="New chat">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path d="M8 3.5v9M3.5 8h9" />
-          </svg>
-          <span>New chat</span>
-          <kbd>{chord('t')}</kbd>
-        </button>
       </div>
-      <button
-        type="button"
-        title={view === 'board' ? 'List' : 'Kanban'}
-        onClick={() => onView(view === 'board' ? 'list' : 'board')}
-        style={{ flexShrink: 0, fontSize: 'var(--t-xs)' }}
-      >
-        {view === 'board' ? 'List' : 'Kanban'}
-      </button>
-      <button
-        type="button"
-        aria-pressed={browserOpen}
-        title="Browser view"
-        onClick={onBrowser}
-        style={{
-          flexShrink: 0,
-          fontSize: 'var(--t-xs)',
-          ...(browserOpen ? { background: 'var(--bg-3)', borderColor: 'var(--focus)' } : {}),
-        }}
-      >
-        Browser <kbd>{chord('b')}</kbd>
-      </button>
-      {settings ? <div style={{ flexShrink: 0 }}>{settings}</div> : null}
-      <button data-new-task onClick={onNew} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-        New chat <kbd>{chord('t')}</kbd>
-      </button>
     </header>
   );
 }

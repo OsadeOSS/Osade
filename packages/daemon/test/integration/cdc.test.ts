@@ -308,3 +308,33 @@ describe('change_log retention', () => {
     expect(oldest).toBeGreaterThan(0);
   });
 });
+
+describe('CDC — an unreadable task does not take the daemon down', () => {
+  it('reports the failure, keeps serving, and does not drop the task', () => {
+    seedTask();
+    const warnings: string[] = [];
+    const broadcaster = new CdcBroadcaster(db, {
+      now: () => NOW,
+      onWarning: (message) => warnings.push(message),
+    });
+    const seen: ServerMessage[] = [];
+
+    // An incompatible database: an auxiliary table `toTaskView` reads is missing. The observed
+    // crash was `no such table: chat_context` thrown from the websocket connection handler.
+    db.exec('DROP TABLE chat_context');
+
+    expect(() => broadcaster.subscribe((message) => seen.push(message))).not.toThrow();
+    const snapshot = seen[0];
+    if (snapshot?.type !== 'snapshot') throw new Error('expected a snapshot');
+    // The unreadable task is omitted from the snapshot rather than crashing it.
+    expect(snapshot.tasks).toEqual([]);
+
+    // A later change still cannot be turned into a view, so no push is sent…
+    db.prepare("UPDATE task SET title = 'renamed' WHERE id = 't1'").run();
+    expect(broadcaster.tick()).toBe(0);
+    // …and crucially no `task.removed`: we could not read the task, which is not the same as it
+    // being gone, so the client keeps whatever it was showing.
+    expect(seen.some((message) => message.type === 'task.removed')).toBe(false);
+    expect(warnings.join('\n')).toContain('chat_context');
+  });
+});

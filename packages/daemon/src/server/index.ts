@@ -66,7 +66,7 @@ export async function startDaemonServer(options: DaemonServerOptions): Promise<R
   const onWarning = options.onWarning ?? (() => {});
   const shells = new TaskShells();
 
-  const broadcaster = new CdcBroadcaster(db, { now });
+  const broadcaster = new CdcBroadcaster(db, { now, onWarning });
   broadcaster.start();
 
   const context: DaemonContext = {
@@ -112,8 +112,17 @@ export async function startDaemonServer(options: DaemonServerOptions): Promise<R
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
     };
 
-    // §18.1 — the renderer discards local state on connect and takes the snapshot.
-    const unsubscribe = broadcaster.subscribe(send);
+    // §18.1 — the renderer discards local state on connect and takes the snapshot. A read that
+    // fails must not escape this handler: an uncaught throw here reaches the process, not the
+    // socket. Report it and close the connection; the renderer reconnects and retries.
+    let unsubscribe: () => void;
+    try {
+      unsubscribe = broadcaster.subscribe(send);
+    } catch (err) {
+      onWarning(`websocket: snapshot failed on connect: ${(err as Error).message}`);
+      socket.close();
+      return;
+    }
 
     socket.on('message', (raw) => {
       const parsed = ClientMessage.safeParse(safeJson(raw.toString()));

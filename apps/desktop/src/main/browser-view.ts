@@ -320,11 +320,13 @@ export class BrowserViewHost {
 
     const zoom = this.options.zoomFactor();
     const safe = zoom > 0 ? zoom : 1;
+    // One CSS pixel at zoom 1.2 covers 1.2 DIP, so this multiplies — dividing shrinks the page
+    // and drags it up and left of its slot.
     const bounds: Rectangle = {
-      x: Math.round(this.wanted.x / safe),
-      y: Math.round(this.wanted.y / safe),
-      width: Math.round(this.wanted.width / safe),
-      height: Math.round(this.wanted.height / safe),
+      x: Math.round(this.wanted.x * safe),
+      y: Math.round(this.wanted.y * safe),
+      width: Math.round(this.wanted.width * safe),
+      height: Math.round(this.wanted.height * safe),
     };
     // A pane squeezed to nothing still swallows every click in the top-left of the window.
     if (bounds.width < 8 || bounds.height < 8) {

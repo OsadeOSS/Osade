@@ -19,11 +19,19 @@ import { toTaskView } from '../domain/task-view.js';
 
 export type Subscriber = (message: ServerMessage) => void;
 
+/** Returned by `#view` when a task's read failed — distinct from "no such task" (`null`). */
+const VIEW_FAILED = Symbol('view-failed');
+
 export interface CdcBroadcasterOptions {
   /** How often to tail `change_log`. Cheap: an indexed range scan over an integer key. */
   intervalMs?: number;
   /** Injected so tests can drive time; defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * Where a task read that failed is reported. A failed read must not take the daemon down; it
+   * is reported and skipped. See `#view`.
+   */
+  onWarning?: (message: string) => void;
 }
 
 interface ChangeRow {
@@ -38,6 +46,7 @@ export class CdcBroadcaster {
   readonly #subscribers = new Set<Subscriber>();
   readonly #intervalMs: number;
   readonly #now: () => number;
+  readonly #onWarning: (message: string) => void;
   #watermark: number;
   #timer: NodeJS.Timeout | null = null;
 
@@ -45,6 +54,7 @@ export class CdcBroadcaster {
     this.#db = db;
     this.#intervalMs = options.intervalMs ?? 100;
     this.#now = options.now ?? Date.now;
+    this.#onWarning = options.onWarning ?? (() => {});
     // Start at the current high-water mark: rows already in the log describe state the first
     // snapshot will carry anyway, so replaying them would only duplicate work.
     this.#watermark = currentWatermark(db);
@@ -74,18 +84,22 @@ export class CdcBroadcaster {
    * takes whatever this returns.
    */
   subscribe(subscriber: Subscriber): () => void {
-    this.#subscribers.add(subscriber);
+    // Take the snapshot *before* registering: if it throws, the subscriber is never added and
+    // the connection handler can recover instead of holding a dangling registration.
     subscriber(this.snapshot());
+    this.#subscribers.add(subscriber);
     return () => this.#subscribers.delete(subscriber);
   }
 
   snapshot(): ServerMessage {
-    return {
-      type: 'snapshot',
-      watermark: currentWatermark(this.#db),
-      at: this.#now(),
-      tasks: listTaskFacts(this.#db).map((f) => this.#view(f.task.id)!),
-    };
+    const tasks: TaskView[] = [];
+    for (const facts of listTaskFacts(this.#db)) {
+      const view = this.#view(facts.task.id);
+      // A task we could not read is omitted rather than crashing the connection.
+      if (view === VIEW_FAILED || view === null) continue;
+      tasks.push(view);
+    }
+    return { type: 'snapshot', watermark: currentWatermark(this.#db), at: this.#now(), tasks };
   }
 
   /**
@@ -117,6 +131,9 @@ export class CdcBroadcaster {
     let sent = 0;
     for (const [taskId, seq] of latestByTask) {
       const view = this.#view(taskId);
+      // A view we could not read is not a removed task: stay quiet rather than telling the
+      // client to drop something it may still be showing.
+      if (view === VIEW_FAILED) continue;
       const message: ServerMessage =
         view == null
           ? { type: 'task.removed', watermark: seq, taskId }
@@ -137,7 +154,26 @@ export class CdcBroadcaster {
     for (const subscriber of this.#subscribers) subscriber(message);
   }
 
-  #view(taskId: string): TaskView | null {
-    return toTaskView(this.#db, taskId, this.#now());
+  /**
+   * A task's view, `null` for a task that no longer exists, or `VIEW_FAILED` for a read that
+   * threw.
+   *
+   * `snapshot()` runs inside the websocket connection handler, so before this guard a single
+   * unreadable task killed the whole daemon: an auxiliary table missing from an incompatible
+   * database (`no such table: chat_context`) threw straight through the socket handler. The
+   * boot-time `assertSchemaCurrent` makes such a database loud; this is the belt to its braces,
+   * covering a read that fails for any reason.
+   */
+  #view(taskId: string): TaskView | null | typeof VIEW_FAILED {
+    try {
+      return toTaskView(this.#db, taskId, this.#now());
+    } catch (err) {
+      this.#onWarning(
+        `could not read task ${taskId} for the UI; skipping it: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return VIEW_FAILED;
+    }
   }
 }

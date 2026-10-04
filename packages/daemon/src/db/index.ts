@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import Database from 'better-sqlite3';
 
-import { MIGRATIONS } from './migrations.js';
+import { MIGRATIONS, type Migration } from './migrations.js';
 
 export type Db = Database.Database;
 
@@ -29,6 +29,16 @@ export function openDb(path: string): Db {
   db.pragma('busy_timeout = 10000');
 
   migrate(db);
+  // §5 — refuse to serve a database this build's migrations do not describe. A divergent build
+  // records ids this one never wrote, or records an id whose table it never created; both used
+  // to surface much later as an obscure crash. Fatal *here*, with the remedy in the message.
+  try {
+    assertSchemaCurrent(db);
+  } catch (err) {
+    // Do not hand back — or leave open — a database this build cannot describe.
+    db.close();
+    throw err;
+  }
   return db;
 }
 
@@ -85,6 +95,80 @@ export function migrate(db: Db): void {
     });
     run();
   }
+}
+
+/**
+ * Raised when the database on disk does not match this build's migrations.
+ *
+ * Fatal at boot by design: a half-working daemon serving a schema it does not understand is
+ * worse than a loud refusal that names the fix.
+ */
+export class SchemaMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SchemaMismatchError';
+  }
+}
+
+/**
+ * OSADE.md §5 — boot-time guard: the database must match this build.
+ *
+ * Migration ids are dense integers and are never reused, so a database written by a *different*
+ * Osade build can collide with this one's ids: `migrate` sees id 13 already recorded and skips
+ * `M013`, and the omission only surfaces later, deep in a read. Observed in the wild as
+ * `SqliteError: no such table: chat_context`, thrown from the websocket snapshot on the first
+ * connect.
+ *
+ * Two shapes are a mismatch, and both are fatal:
+ *   - an applied id this build does not define (a newer or other build wrote it), and
+ *   - an applied migration whose `probe` table is absent (its id collided and it was skipped).
+ *
+ * The remedy is total and cheap by design — §2.2: `~/.osade` is resettable.
+ */
+export function assertSchemaCurrent(db: Db, migrations: readonly Migration[] = MIGRATIONS): void {
+  const applied = new Set(
+    db
+      .prepare('SELECT id FROM schema_migration')
+      .all()
+      .map((row) => (row as { id: number }).id),
+  );
+  const known = new Set(migrations.map((migration) => migration.id));
+
+  const unknown = [...applied].filter((id) => !known.has(id)).sort((a, b) => a - b);
+  if (unknown.length > 0) {
+    throw new SchemaMismatchError(
+      `this database was written by a different Osade build: migration(s) ${unknown.join(', ')} ` +
+        `are recorded but unknown here. Migration ids are dense and never reused, so a divergent ` +
+        `build skips this one's silently. Reset state: delete the Osade database file ` +
+        `(~/.osade/osade.db by default; see OSADE.md §2.2).`,
+    );
+  }
+
+  const skipped: string[] = [];
+  for (const migration of migrations) {
+    if (!migration.probe || !applied.has(migration.id)) continue;
+    if (!tableExists(db, migration.probe)) {
+      skipped.push(
+        `table "${migration.probe}" (from migration ${migration.id}: ${migration.name})`,
+      );
+    }
+  }
+  if (skipped.length > 0) {
+    throw new SchemaMismatchError(
+      `this database is out of step with this build: recorded migrations whose tables are ` +
+        `missing:\n  - ${skipped.join(
+          '\n  - ',
+        )}\nMigration ids are dense and never reused, so a divergent build can skip one silently. ` +
+        `Reset state: delete the Osade database file (~/.osade/osade.db by default; see OSADE.md §2.2).`,
+    );
+  }
+}
+
+function tableExists(db: Db, name: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(name);
+  return row !== undefined;
 }
 
 /** Current high-water mark in `change_log`. A fresh database is 0. */

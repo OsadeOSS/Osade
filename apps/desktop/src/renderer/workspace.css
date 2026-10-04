@@ -98,19 +98,44 @@
   white-space: nowrap;
 }
 
+/* One row, equal-width buttons. Labels give way to icons before anything wraps. */
 .osade-actions {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 6px;
-  margin-top: 10px;
-  flex-wrap: wrap;
+  margin-top: 6px;
+  container-type: inline-size;
+}
+
+.osade-actions > .osade-action-btn {
+  flex: 1 1 0;
+}
+
+.osade-settings {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.osade-settings > .osade-action-btn {
+  padding: 4px 7px;
+}
+
+@container (max-width: 259px) {
+  .osade-action-label {
+    display: none;
+  }
 }
 
 .osade-action-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
+  min-width: 0;
+  height: 26px;
   padding: 4px 8px;
+  overflow: hidden;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--ink-2);
   background: var(--bg-2);
@@ -126,12 +151,22 @@
   color: var(--ink);
 }
 
+.osade-action-btn[aria-pressed='true'] {
+  background: var(--bg-3);
+  border-color: var(--focus);
+  color: var(--ink);
+}
+
 .osade-new-chat-btn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  margin-left: auto;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+  margin-top: 10px;
   padding: 4px 10px;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 500;
   color: var(--ink);

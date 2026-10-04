@@ -33,8 +33,8 @@ export interface BrowserPaneProps {
  * The page itself is **not** here. It is a `WebContentsView` parented to the window in the main
  * process, and it paints over this component whatever z-index this component asks for. So this
  * component's real job is the unglamorous one: reserve exactly the right rectangle, in CSS
- * pixels, and tell main about it. `ResizeObserver` does that, which is also why a window resize
- * needs no event listener — the host div changes size and the observer fires.
+ * pixels, and tell main about it. `ResizeObserver` catches size changes; a window `resize`
+ * listener catches the pane being moved without being resized.
  *
  * While the annotator is up the view is detached rather than covered, because "hidden" for a
  * native child view means "not a child of this window".
@@ -114,7 +114,13 @@ export function BrowserPane({ onClose }: BrowserPaneProps): JSX.Element {
     if (host == null || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => publishBounds());
     observer.observe(host);
-    return () => observer.disconnect();
+    // The pane is a fixed-width column on the right, so a window resize moves it without
+    // resizing it — and the observer only sees size.
+    window.addEventListener('resize', publishBounds);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', publishBounds);
+    };
   }, [publishBounds]);
 
   useEffect(() => {

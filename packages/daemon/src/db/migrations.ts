@@ -11,6 +11,14 @@ export interface Migration {
   readonly id: number;
   readonly name: string;
   readonly sql: string;
+  /**
+   * A table this migration is guaranteed to have created once it has run.
+   *
+   * `assertSchemaCurrent` (`db/index.ts`) reads these to catch a migration whose id was recorded
+   * by a *different* Osade build and therefore silently skipped here. Omitted for migrations that
+   * only ALTER an existing table, which have nothing new to probe for.
+   */
+  readonly probe?: string;
 }
 
 /** Tables whose mutations must reach the UI. Each gets the three CDC triggers below. */
@@ -515,21 +523,25 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     id: 1,
     name: 'core tables, facts, change_log',
+    probe: 'change_log',
     sql: M001_CORE + CORE_CDC_TABLES.map(cdcTriggers).join('\n'),
   },
   {
     id: 2,
     name: 'verify plan, task lanes, repo verification policy',
+    probe: 'verify_plan',
     sql: M002_VERIFY,
   },
   {
     id: 3,
     name: 'repository conventions, evidence, mine runs',
+    probe: 'convention',
     sql: M003_CONVENTIONS,
   },
   {
     id: 4,
     name: 'convention injection, recorded per launch for §13.6',
+    probe: 'task_injection',
     sql: M004_INJECTION,
   },
   {
@@ -550,6 +562,7 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     id: 8,
     name: 'durable chat turns — typed send, not pane scrape',
+    probe: 'chat_turn',
     sql: M008_CHAT_TURNS + cdcTriggers('chat_turn'),
   },
   {
@@ -565,6 +578,7 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     id: 11,
     name: 'memory with FTS5 retrieval, no vector store',
+    probe: 'memory',
     sql: M011_MEMORY_FTS,
   },
   {
@@ -575,11 +589,13 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     id: 13,
     name: 'chat context repositories, read-only unless promoted',
+    probe: 'chat_context',
     sql: M013_CHAT_CONTEXT,
   },
   {
     id: 14,
     name: 'quick notes, repo-scoped, resolve is a timestamp',
+    probe: 'quick_note',
     sql: M014_QUICK_NOTES,
   },
 ];
