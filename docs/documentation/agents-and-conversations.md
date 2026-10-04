@@ -33,6 +33,20 @@ The shell keeps running while you switch to other tabs, and its scrollback stays
 Closing the tab (`Ctrl+W` / `Cmd+W`, or its ×) ends the shell. Terminal tabs are not restored
 when Osade restarts.
 
+### Terminal behaviour
+
+Terminal tabs and a lane's **Terminal** view use the same emulator:
+
+- It renders on the GPU through WebGL. If WebGL is unavailable or the graphics context is lost,
+  it falls back to the slower DOM renderer and keeps working.
+- Character widths follow Unicode 11, so emoji and CJK text line up the way agent TUIs expect.
+- Text uses a full 16-colour palette with truecolor (`COLORTERM=truecolor`).
+- URLs are clickable and open in your system browser.
+- Each terminal keeps up to 10,000 lines of scrollback. If you leave a lane and come back while
+  its shell is still running, the terminal shows that shell's most recent output again (about the
+  last 256 KB) instead of opening blank.
+- `Ctrl+C` copies when text is selected and otherwise interrupts. `Ctrl+V` pastes.
+
 ## Run multiple agents in one conversation
 
 Use agent mentions to target work:

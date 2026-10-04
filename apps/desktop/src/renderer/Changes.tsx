@@ -1,11 +1,10 @@
 import {
   useEffect,
-  useRef,
   useState,
   type JSX,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { TaskView } from '@osade/contract';
 
@@ -14,9 +13,6 @@ import { hunkAttach, type ComposerAttach } from './compose-attach.js';
 import { composeAppend } from './compose-event.js';
 import { flagColour, parseUnified } from './highlight.js';
 import { PrOpen } from './PrOpen.js';
-
-const TREE_KEY = 'osade.changes-tree-width';
-const TREE_DEFAULT = 240;
 
 type Flag = 'M' | 'A' | 'D' | '?';
 
@@ -34,17 +30,25 @@ interface Pick {
 
 /**
  * Diff lane — VS Code Source Control shape: working-tree changes, then commits not yet pushed.
+ *
+ * Laid out like Orca: the list is the side panel, and the picked file's diff renders into
+ * `viewerHost`, a slot in the centre column.
  */
 export function Changes({
   task,
   lanes,
   onAttach,
+  viewerHost,
+  onShow,
 }: {
   task: TaskView;
   lanes?: TaskView[];
   onAttach?: (attach: ComposerAttach | null) => void;
+  /** The centre column's slot for the diff. Nothing renders there until it exists. */
+  viewerHost: HTMLElement | null;
+  /** A file was picked: bring the centre over to its diff. */
+  onShow?: () => void;
 }): JSX.Element {
-  const [width, setWidth] = useState(() => loadWidth());
   const [files, setFiles] = useState<ChangeFile[]>([]);
   const [outgoing, setOutgoing] = useState<{
     ahead: number;
@@ -56,7 +60,6 @@ export function Changes({
   const [marked, setMarked] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
-  const drag = useRef<{ start: number; width: number } | null>(null);
   const stamp = `${task.task.id}:${task.cwd}:${task.agent?.last_event_at ?? 0}:${task.status}`;
 
   useEffect(() => {
@@ -112,31 +115,6 @@ export function Changes({
     setCursor(0);
   }, [picked?.path, picked?.vs, diff]);
 
-  function onDragStart(event: ReactMouseEvent<HTMLDivElement>): void {
-    event.preventDefault();
-    drag.current = { start: event.clientX, width };
-    function move(ev: MouseEvent): void {
-      if (!drag.current) return;
-      const next = Math.min(420, Math.max(160, drag.current.width + (ev.clientX - drag.current.start)));
-      setWidth(next);
-    }
-    function up(): void {
-      drag.current = null;
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
-      setWidth((current) => {
-        try {
-          localStorage.setItem(TREE_KEY, String(current));
-        } catch {
-          // ignore
-        }
-        return current;
-      });
-    }
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
-  }
-
   const lines = parseUnified(diff ?? '');
 
   useEffect(() => {
@@ -167,15 +145,7 @@ export function Changes({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <div
-          style={{
-            width,
-            flexShrink: 0,
-            overflow: 'auto',
-            borderRight: '0.5px solid var(--line)',
-            padding: '8px 0 12px',
-          }}
-        >
+        <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '8px 0 12px' }}>
           <Group title="Changes" count={files.length}>
             {files.length === 0 && (
               <p style={{ margin: '4px 12px', color: 'var(--ink-3)', fontSize: 'var(--t-xs)' }}>
@@ -187,7 +157,10 @@ export function Changes({
                 key={`w:${row.path}`}
                 row={row}
                 active={picked?.vs === 'working' && picked.path === row.path}
-                onClick={() => setPicked({ path: row.path, vs: 'working' })}
+                onClick={() => {
+                  setPicked({ path: row.path, vs: 'working' });
+                  onShow?.();
+                }}
               />
             ))}
           </Group>
@@ -233,7 +206,10 @@ export function Changes({
                 key={`o:${row.path}`}
                 row={row}
                 active={picked?.vs === 'outgoing' && picked.path === row.path}
-                onClick={() => setPicked({ path: row.path, vs: 'outgoing' })}
+                onClick={() => {
+                  setPicked({ path: row.path, vs: 'outgoing' });
+                  onShow?.();
+                }}
               />
             ))}
           </Group>
@@ -241,11 +217,9 @@ export function Changes({
             <p style={{ margin: '8px 12px', color: 'var(--st-fail)', fontSize: 'var(--t-xs)' }}>{error}</p>
           )}
         </div>
-        <div
-          onMouseDown={onDragStart}
-          style={{ width: 5, cursor: 'col-resize', flexShrink: 0, background: 'transparent' }}
-        />
-        <div style={{ flex: 1, minWidth: 0, overflow: 'auto', background: 'var(--bg-0)' }}>
+        {viewerHost &&
+          createPortal(
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'auto', background: 'var(--bg-0)' }}>
           {picked == null ? (
             <p style={{ margin: 0, padding: '12px 16px', color: 'var(--ink-2)' }}>No changes</p>
           ) : diff == null ? (
@@ -301,7 +275,9 @@ export function Changes({
               </pre>
             </div>
           )}
-        </div>
+        </div>,
+            viewerHost,
+          )}
       </div>
       <div
         style={{
@@ -408,14 +384,4 @@ function ChangeRow({
       </span>
     </button>
   );
-}
-
-function loadWidth(): number {
-  try {
-    const raw = Number(localStorage.getItem(TREE_KEY));
-    if (Number.isFinite(raw) && raw >= 160 && raw <= 420) return raw;
-  } catch {
-    // ignore
-  }
-  return TREE_DEFAULT;
 }

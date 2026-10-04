@@ -311,12 +311,13 @@ export const appRouter = t.router({
         rows: z.number().int().min(2).max(200).optional(),
       }),
     )
-    .output(z.object({ cwd: z.string() }))
+    .output(z.object({ cwd: z.string(), replay: z.string() }))
     .mutation(({ ctx, input }) => {
       const located = locateTaskCwd(ctx, input.taskId);
       const size =
         input.cols != null && input.rows != null ? { cols: input.cols, rows: input.rows } : undefined;
-      return { cwd: ctx.shells.open(input.taskId, located.cwd, size) };
+      const cwd = ctx.shells.open(input.taskId, located.cwd, size);
+      return { cwd, replay: ctx.shells.replay(input.taskId) };
     }),
 
   taskShellRead: t.procedure
@@ -376,7 +377,7 @@ export const appRouter = t.router({
         rows: z.number().int().min(2).max(200).optional(),
       }),
     )
-    .output(z.object({ cwd: z.string() }))
+    .output(z.object({ cwd: z.string(), replay: z.string() }))
     .mutation(({ ctx, input }) => {
       if (!existsSync(input.cwd) || !statSync(input.cwd).isDirectory()) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: `not a folder: ${input.cwd}` });
@@ -384,7 +385,8 @@ export const appRouter = t.router({
       const size =
         input.cols != null && input.rows != null ? { cols: input.cols, rows: input.rows } : undefined;
       try {
-        return { cwd: ctx.shells.open(`term:${input.id}`, input.cwd, size, input.shell) };
+        const cwd = ctx.shells.open(`term:${input.id}`, input.cwd, size, input.shell);
+        return { cwd, replay: ctx.shells.replay(`term:${input.id}`) };
       } catch (err) {
         throw new TRPCError({ code: 'PRECONDITION_FAILED', message: (err as Error).message });
       }
@@ -653,6 +655,18 @@ export const appRouter = t.router({
         | undefined;
       if (!repo) throw new TRPCError({ code: 'NOT_FOUND', message: 'unknown repo' });
       return repoWorkingStatus(repo.path);
+    }),
+
+  /** Where a known repository lives, so a new session can start there without asking again. */
+  repoPath: t.procedure
+    .input(z.object({ repoId: z.string().min(1) }))
+    .output(z.object({ path: z.string() }))
+    .query(({ ctx, input }) => {
+      const repo = ctx.db.prepare('SELECT path FROM repo WHERE id = ?').get(input.repoId) as
+        | { path: string }
+        | undefined;
+      if (!repo) throw new TRPCError({ code: 'NOT_FOUND', message: 'unknown repo' });
+      return { path: repo.path };
     }),
 
   repoBranchList: t.procedure

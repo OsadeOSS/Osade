@@ -101,6 +101,7 @@ export interface PlanStep {
 
 export const api = {
   /** §17 — the same call `osade .` makes. Idempotent, resolves to the repository root. */
+  repoPath: (repoId: string) => call('query', 'repoPath', { repoId }) as Promise<{ path: string }>,
   repoOpen: (path: string) =>
     call('mutation', 'repoOpen', { path }) as Promise<{
       repoId: string;
@@ -291,7 +292,7 @@ export const api = {
     }>,
 
   taskShellOpen: (taskId: string, size?: { cols: number; rows: number }) =>
-    call('mutation', 'taskShellOpen', { taskId, ...size }) as Promise<{ cwd: string }>,
+    call('mutation', 'taskShellOpen', { taskId, ...size }) as Promise<{ cwd: string; replay: string }>,
   taskShellRead: (taskId: string) =>
     call('query', 'taskShellRead', { taskId }) as Promise<{ text: string }>,
   taskShellWrite: (taskId: string, data: string) =>
@@ -302,7 +303,7 @@ export const api = {
   terminalShells: () =>
     call('query', 'terminalShells') as Promise<{ kind: ShellKind; label: string }[]>,
   terminalOpen: (id: string, cwd: string, shell: ShellKind, size?: { cols: number; rows: number }) =>
-    call('mutation', 'terminalOpen', { id, cwd, shell, ...size }) as Promise<{ cwd: string }>,
+    call('mutation', 'terminalOpen', { id, cwd, shell, ...size }) as Promise<{ cwd: string; replay: string }>,
   terminalRead: (id: string) => call('query', 'terminalRead', { id }) as Promise<{ text: string }>,
   terminalWrite: (id: string, data: string) =>
     call('mutation', 'terminalWrite', { id, data }) as Promise<{ ok: true }>,

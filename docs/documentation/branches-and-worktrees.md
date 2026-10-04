@@ -11,7 +11,7 @@ Osade makes the checkout location visible because it determines where an agent c
 
 The first chat in a repository can attach to the working tree and branch you already opened. This
 preserves uncommitted changes and avoids creating a branch before you have decided the work is
-worth keeping. The session header shows a **checkout** badge for an attached lane.
+worth keeping. In the sidebar, the branch a checkout lane is on carries a **primary** badge.
 
 When an attached agent starts implementing, Osade offers two choices:
 
@@ -28,7 +28,8 @@ Additional chats and additional agents in one conversation use isolated Git work
 needed. Each lane gets its own branch and working directory, so two agents do not write to the
 same tree.
 
-The branch menu in the session header identifies worktree lanes and provides:
+The branch menu, at the right of the Chat/Terminal switch above the conversation, identifies
+worktree lanes and provides:
 
 - **Use a worktree** for an attached checkout;
 - **Switch branch** for the real checkout;

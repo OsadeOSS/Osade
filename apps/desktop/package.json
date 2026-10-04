@@ -11,11 +11,14 @@
     "build": "pnpm build:main && pnpm build:renderer",
     "start": "pnpm --filter @osade/daemon build && pnpm build && electron .",
     "smoke": "pnpm --filter @osade/daemon build && pnpm build && cross-env OSADE_HOME=.smoke OSADE_SMOKE_SHOT=smoke.png electron .",
-    "smoke:panels": "pnpm --filter @osade/daemon build && pnpm build && pnpm --filter @osade/daemon exec vite-node scripts/seed-smoke-fixture.mjs ../../apps/desktop/.smoke && cross-env OSADE_HOME=.smoke OSADE_SMOKE_SHOT=smoke.png OSADE_SMOKE_CLICK=[data-task-id] OSADE_SMOKE_EXPECT=\"Retry the flaky poller test|Needs your approval|This leaves your machine|Open pull request|osade/retry-flaky-poller|Approving binds this exact text|Skills|loop-engineering|Chat|Files|Checks|Diff|Rules\" electron ."
+    "smoke:panels": "pnpm --filter @osade/daemon build && pnpm build && pnpm --filter @osade/daemon exec vite-node scripts/seed-smoke-fixture.mjs ../../apps/desktop/.smoke && cross-env OSADE_HOME=.smoke OSADE_SMOKE_SHOT=smoke.png OSADE_SMOKE_CLICK=[data-task-id] OSADE_SMOKE_EXPECT=\"Retry the flaky poller test|This leaves your machine|Open pull request|osade/retry-flaky-poller|Approving binds this exact text|Projects|Tasks|Chat|Terminal|Daemon connected\" electron ."
   },
   "dependencies": {
     "@osade/contract": "workspace:*",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0"
   },
   "devDependencies": {

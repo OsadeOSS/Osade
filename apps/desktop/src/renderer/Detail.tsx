@@ -1,10 +1,9 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { createPortal } from 'react-dom';
 
 import type { VerifyRun } from '@osade/contract';
 
 import { agentColor } from './agent-color.js';
-import { AgentMark } from './agent-icon.js';
 import { api } from './api.js';
 import { attachCheckoutHint, isolatedWorktreeHint } from './branch-copy.js';
 import { BranchControl } from './BranchControl.js';
@@ -23,11 +22,10 @@ import {
   retainLaneTerminal,
   terminalSurfaceVisible,
 } from './lane-terminal.js';
-import { chatLabel, type ChatGroup } from './lanes.js';
+import type { ChatGroup } from './lanes.js';
 import type { CatalogAgent } from './RepoSettings.js';
-import { GLYPH, STATUS, TONE_COLOUR, ago, statusCopyFor } from './status.js';
+import { GLYPH, STATUS, TONE_COLOUR, ago } from './status.js';
 import type { ContextRepo } from './repo-context.js';
-import { activeSkillsFromTask } from './skill-state.js';
 import { Transcript } from './Transcript.js';
 import { VerifyPlanReview } from './VerifyPlanReview.js';
 
@@ -104,6 +102,20 @@ contextRepos?: ContextRepo[];
 }): JSX.Element {
   const [filter, setFilter] = useState<string | null>(null);
   const [chatSurface, setChatSurface] = useState<'chat' | 'terminal'>('chat');
+  /**
+   * What the centre shows instead of the conversation, like an editor tab in Orca: the file
+   * opened from the Files tree, or the diff picked in Changes. Null is the conversation.
+   */
+  const [viewer, setViewer] = useState<'file' | 'diff' | null>(null);
+  const [fileHost, setFileHost] = useState<HTMLDivElement | null>(null);
+  const [diffHost, setDiffHost] = useState<HTMLDivElement | null>(null);
+  /** Which of the two has something to show, so the centre switch only offers real views. */
+  const [opened, setOpened] = useState<{ file: boolean; diff: boolean }>({ file: false, diff: false });
+  /**
+   * Files and Changes stay mounted once visited, because their viewer lives in the centre: leaving
+   * the panel view must not close the file you are reading.
+   */
+  const [seen, setSeen] = useState<{ files: boolean; diff: boolean }>({ files: false, diff: false });
   const [openedTerminal, setOpenedTerminal] = useState<string | null>(null);
   const [laneAttach, setLaneAttach] = useState<ComposerAttach | null>(null);
   const [attachDismissed, setAttachDismissed] = useState(false);
@@ -121,7 +133,45 @@ contextRepos?: ContextRepo[];
    * unmounting on `{panel === 'files' && …}` is exactly the moment that stops being true.
    */
   const [fileContext, setFileContext] = useState<FileContext | null>(null);
+  // Files stays mounted while its viewer is hidden, so what it reports only counts while the file
+  // is actually in the centre. The last report is kept to restore when it comes back.
+  const lastFile = useRef<FileContext | null>(null);
+  const viewerRef = useRef(viewer);
+  viewerRef.current = viewer;
+  const reportFile = useCallback((open: FileContext | null) => {
+    lastFile.current = open;
+    setFileContext(viewerRef.current === 'file' ? open : null);
+  }, []);
+  useEffect(() => {
+    setFileContext(viewer === 'file' ? lastFile.current : null);
+  }, [viewer]);
   const focused = chat.lanes.find((t) => t.task.id === focusId) ?? chat.lanes[0]!;
+  if (panel === 'files' && !seen.files) setSeen({ ...seen, files: true });
+  if (panel === 'diff' && !seen.diff) setSeen({ ...seen, diff: true });
+
+  // Another lane is another working tree: its files and diffs start closed.
+  useEffect(() => {
+    setViewer(null);
+    setOpened({ file: false, diff: false });
+    setSeen({ files: false, diff: false });
+  }, [focused.task.id]);
+
+  function showFile(): void {
+    setOpened((current) => ({ ...current, file: true }));
+    setViewer('file');
+  }
+
+  function showDiff(): void {
+    setOpened((current) => ({ ...current, diff: true }));
+    setViewer('diff');
+  }
+
+  /** Back to the conversation or its terminal; the open file's context leaves the composer. */
+  function showSurface(surface: 'chat' | 'terminal'): void {
+    setViewer(null);
+    setChatSurface(surface);
+    setLaneAttach(null);
+  }
 
   // A note must never inherit a file from a lane the reader is not looking at. Two ways that
   // happens in this app, both handled here: switching tabs away from Files unmounts the lane
@@ -136,11 +186,8 @@ contextRepos?: ContextRepo[];
   }, [fileContext, onFileContextChange]);
   const rememberedTerminal = nextOpenedTerminal(openedTerminal, focused.task.id, chatSurface);
   if (rememberedTerminal !== openedTerminal) setOpenedTerminal(rememberedTerminal);
-  const terminalVisible = terminalSurfaceVisible('transcript', chatSurface);
+  const terminalVisible = viewer == null && terminalSurfaceVisible('transcript', chatSurface);
   const keepTerminal = retainLaneTerminal(rememberedTerminal, focused.task.id);
-  const copy = statusCopyFor(chat.status, focused.agent?.external_block);
-  const colour = TONE_COLOUR[copy.tone];
-  const activeSkills = activeSkillsFromTask(focused);
   const openGates = chat.lanes.flatMap((t) =>
     t.openGates.filter((g) => g.decided_at == null).map((gate) => ({ gate, task: t })),
   );
@@ -163,6 +210,20 @@ contextRepos?: ContextRepo[];
     setLaneAttach(null);
   }, [panel, focused.task.id]);
 
+  const gates =
+    openGates.length > 0 ? (
+      <section className="gate-stack">
+        {openGates.map(({ gate, task }) => (
+          <div key={gate.id}>
+            <p className="mono" style={{ margin: '0 0 6px', fontSize: 'var(--t-xs)', color: agentColor(task.agentId) }}>
+              {task.agentId} · {task.task.branch}
+            </p>
+            <GateCard gate={gate} task={task} onDecided={() => {}} />
+          </div>
+        ))}
+      </section>
+    ) : null;
+
   async function handleSend(text: string, photos: ComposerPhoto[] = []): Promise<void> {
     const match = text.match(/^\/branch(?:\s+(.*))?$/iu);
     if (match) {
@@ -180,112 +241,14 @@ contextRepos?: ContextRepo[];
 
   return (
     <div className="workspace" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <header className="workspace-head">
-        <div className="workspace-title-row">
-          <div className="workspace-agent-frame" title={`Agent: ${focused.agentId}`}>
-            <AgentMark name={focused.agentId} size={18} />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h1 className="workspace-title">{chatLabel(chat)}</h1>
-            <div className="session-meta-row">
-              <span className="meta-pill" style={{ color: agentColor(focused.agentId), borderColor: 'rgba(255, 255, 255, 0.08)' }}>
-                {focused.agentId}
-              </span>
-              {focused.branch && (
-                <span className="meta-pill mono" title={focused.branch}>
-                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-                    <circle cx="4" cy="4" r="2" />
-                    <circle cx="4" cy="12" r="2" />
-                    <circle cx="12" cy="7" r="2" />
-                    <path d="M4 6v4M4 8a4 4 0 0 1 4-4h2" />
-                  </svg>
-                  <span>{focused.branch}</span>
-                </span>
-              )}
-              {focused.attachment === 'repo' && (
-                <span className="meta-pill" style={{ color: 'var(--ink-3)' }}>
-                  checkout
-                </span>
-              )}
-              {activeSkills.length > 0 && (
-                <span
-                  className="active-skills-pill"
-                  title={`Active skills: ${activeSkills.join(', ')}`}
-                  aria-label={`Active skills: ${activeSkills.join(', ')}`}
-                >
-                  <svg
-                    width="10"
-                    height="10"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    aria-hidden="true"
-                  >
-                    <circle cx="4" cy="4" r="2" />
-                    <circle cx="12" cy="4" r="2" />
-                    <circle cx="8" cy="12" r="2" />
-                    <path d="M5.8 4h4.4M5 5.6l2 4.5M11 5.6l-2 4.5" />
-                  </svg>
-                  <span className="active-skills-label">Skills</span>
-                  <span className="mono active-skills-value">{activeSkills.join(' + ')}</span>
-                </span>
-              )}
-            </div>
-          </div>
-          <span className="workspace-status-badge" style={{ color: colour }}>
-            <span
-              className={`status-badge-dot ${copy.tone === 'live' ? 'dock-status-live' : ''}`}
-              style={{ background: colour }}
-              aria-hidden="true"
-            />
-            <span>{copy.label}</span>
-          </span>
-          <BranchControl
-            task={focused}
-            focusTaskId={focusId}
-            onNewIsolatedChat={onNewIsolatedChat}
-            onMoveToBranch={onMoveToBranch}
-          />
+      {chat.lanes.length > 1 && (
+        <div className="lane-strip-row">
+          <LaneStrip chat={chat} focusId={focused.task.id} onFocus={onFocus} pending={pending} />
         </div>
-        <LaneStrip chat={chat} focusId={focused.task.id} onFocus={onFocus} pending={pending} />
-      </header>
-
-      {openGates.length > 0 ? (
-        <section
-          style={{
-            background: 'var(--bg-1)',
-            borderBottom: '0.5px solid var(--line)',
-            borderLeft: '2px solid var(--st-needs)',
-            padding: '12px 16px',
-          }}
-        >
-          {openGates.map(({ gate, task }) => (
-            <div key={gate.id}>
-              <p className="mono" style={{ margin: '0 0 6px', fontSize: 'var(--t-xs)', color: agentColor(task.agentId) }}>
-                {task.agentId} · {task.task.branch}
-              </p>
-              <GateCard gate={gate} task={task} onDecided={() => {}} />
-            </div>
-          ))}
-        </section>
-      ) : (
-        copy.next && (
-          <section
-            style={{
-              padding: '10px 16px',
-              borderBottom: '0.5px solid var(--line)',
-              color: 'var(--ink-2)',
-              fontSize: 'var(--t-s)',
-            }}
-          >
-            {copy.next}
-            {chat.status === 'blocked_external' && focused.agent?.external_block
-              ? ` ${focused.agent.external_block}`
-              : ''}
-          </section>
-        )
       )}
+
+      {/* Approvals live in the side panel; with the panel hidden they come back here. */}
+      {panelHost == null && gates}
 
       {showPrLaneOffer && prBranch && (
         <section
@@ -336,25 +299,43 @@ contextRepos?: ContextRepo[];
         </section>
       )}
 
+      <div className="center-switch">
+        <FilterChip
+          label="Chat"
+          active={viewer == null && chatSurface === 'chat'}
+          onClick={() => showSurface('chat')}
+        />
+        <FilterChip
+          label="Terminal"
+          active={viewer == null && chatSurface === 'terminal'}
+          onClick={() => showSurface('terminal')}
+        />
+        {opened.file && <FilterChip label="File" active={viewer === 'file'} onClick={showFile} />}
+        {opened.diff && <FilterChip label="Diff" active={viewer === 'diff'} onClick={showDiff} />}
+        <span style={{ marginLeft: 'auto' }}>
+          <BranchControl
+            task={focused}
+            focusTaskId={focusId}
+            onNewIsolatedChat={onNewIsolatedChat}
+            onMoveToBranch={onMoveToBranch}
+          />
+        </span>
+      </div>
+
+      <div ref={setFileHost} className="center-viewer" style={{ display: viewer === 'file' ? 'flex' : 'none' }} />
+      <div ref={setDiffHost} className="center-viewer" style={{ display: viewer === 'diff' ? 'flex' : 'none' }} />
+
       <div
-        data-chat-scroll={chatSurface === 'chat' ? '' : undefined}
+        data-chat-scroll={viewer == null && chatSurface === 'chat' ? '' : undefined}
         style={{
           flex: 1,
           minHeight: 0,
-          display: 'flex',
+          display: viewer == null ? 'flex' : 'none',
           flexDirection: 'column',
           overflow: terminalVisible ? 'hidden' : 'auto',
-          padding: terminalVisible ? 0 : '32px 28px 40px',
+          padding: terminalVisible ? 0 : '24px 28px 40px',
         }}
       >
-        <div className="reading-tools" style={{ padding: terminalVisible ? '8px 12px 0' : 0 }}>
-          <FilterChip label="Chat" active={chatSurface === 'chat'} onClick={() => setChatSurface('chat')} />
-          <FilterChip
-            label="Terminal"
-            active={chatSurface === 'terminal'}
-            onClick={() => setChatSurface('terminal')}
-          />
-        </div>
         {chatSurface === 'chat' && (
           <>
             {chat.lanes.length > 1 && (
@@ -413,6 +394,7 @@ contextRepos?: ContextRepo[];
               onOpenDiff={(taskId) => {
                 onFocus(taskId);
                 onPanel('diff');
+                showDiff();
               }}
             />
           </>
@@ -462,6 +444,7 @@ contextRepos?: ContextRepo[];
         createPortal(
           <>
             <PanelTabs panel={panel} onPanel={onPanel} counts={{ checks: failingChecks }} />
+            {gates}
             <div
               className="right-panel-body"
               style={{
@@ -469,15 +452,19 @@ contextRepos?: ContextRepo[];
                 padding: panel === 'files' || panel === 'diff' ? 0 : 16,
               }}
             >
-              {panel === 'files' && (
-                <Files
-                  key={focused.task.id}
-                  task={focused}
-                  onAttach={setLaneAttach}
-                  openPath={noteTarget}
-                  onOpenChange={setFileContext}
-                  notesRevision={notesVersion}
-                />
+              {seen.files && (
+                <div className="right-panel-pane" style={{ display: panel === 'files' ? 'flex' : 'none' }}>
+                  <Files
+                    key={focused.task.id}
+                    task={focused}
+                    onAttach={viewer === 'file' ? setLaneAttach : undefined}
+                    openPath={noteTarget}
+                    onOpenChange={reportFile}
+                    notesRevision={notesVersion}
+                    viewerHost={fileHost}
+                    onShow={showFile}
+                  />
+                </div>
               )}
               {panel === 'checks' && (
                 <>
@@ -489,8 +476,17 @@ contextRepos?: ContextRepo[];
                   <VerifyRuns runs={focused.latestVerifyRuns} />
                 </>
               )}
-              {panel === 'diff' && (
-                <Changes key={focused.task.id} task={focused} lanes={chat.lanes} onAttach={setLaneAttach} />
+              {seen.diff && (
+                <div className="right-panel-pane" style={{ display: panel === 'diff' ? 'flex' : 'none' }}>
+                  <Changes
+                    key={focused.task.id}
+                    task={focused}
+                    lanes={chat.lanes}
+                    onAttach={viewer === 'diff' ? setLaneAttach : undefined}
+                    viewerHost={diffHost}
+                    onShow={showDiff}
+                  />
+                </div>
               )}
               {panel === 'rules' && (
                 <Conventions repoId={focused.task.repo_id} onAttach={setLaneAttach} />

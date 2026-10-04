@@ -47,18 +47,24 @@ kill its underlying agent process.
 
 ## The conversation and the side panel
 
-The centre always shows the conversation: durable user and agent turns, lane filters, approval
-requests, and the composer. Switch it from **Chat** to **Terminal** for the live terminal.
+The centre shows the conversation: durable user and agent turns, lane filters, approval requests,
+and the composer. There is no session header; the conversation starts right below the tabs. A
+switch above it moves the centre between **Chat**, **Terminal** (the live terminal), and, once you
+have opened one, **File** and **Diff**. The branch menu sits at the right of that switch. When a conversation has more than one lane, a row of lane buttons above it
+picks which lane the views and terminal follow.
 
 The side panel holds the other views. Pick one from its icon row, or press `2` through `6` when
 you are not typing:
 
-- **Files** (`2`) — browse the task checkout, open and edit text files, preview Markdown, and see
-  Git status plus insertion/deletion counts.
+- **Files** (`2`) — the task checkout's file tree, with Git status and insertion/deletion counts.
+  Click a file to open it in the centre, where you can edit it, save with `Ctrl+S` (`Cmd+S`), and
+  preview Markdown. Opened files get tabs along the top of the centre; double-click a file in the
+  tree to keep its tab open.
 - **Checks** (`3`) — detect, review, edit, confirm, and run the repository's verification plan;
   inspect the latest result and logs for every step.
-- **Changes** (`4`) — review working-tree changes and unpushed commits, inspect per-file additions
-  and deletions, and select lines to ask about.
+- **Changes** (`4`) — working-tree changes and unpushed commits with per-file additions and
+  deletions, plus **Open pull request**. Click a file to show its diff in the centre, then select
+  lines to ask about.
 - **Rules** (`5`) — maintain the repository instructions that are injected into agent sessions.
 - **Notes** (`6`) — capture and manage repository-scoped reminders.
 
@@ -67,18 +73,21 @@ resize it, and double-click the edge to reset the width. Osade remembers whether
 wide it was. In windows narrower than 960 px, the sidebar and the panel start hidden. With no
 conversation open, the panel shows its icons disabled.
 
+An open file or diff stays open while you look at another panel view. Switch back with **File** or
+**Diff**. Focusing a different lane closes them, since that lane has its own working tree.
+
 ## Ask about what you are viewing
 
-The composer stays beside whichever side-panel view is open. Osade prepares context from that view:
+The composer stays below the centre. Osade prepares context from what you are looking at:
 
-- the whole open file or selected lines in Files;
+- the whole open file, or the selected lines, while a file is in the centre;
 - the focused check and its log tail in Checks;
-- the current diff hunk in Changes;
+- the current diff hunk while a diff is in the centre;
 - the focused rule in Rules.
 
 The attachment appears above the composer and is prepended to the next message. Dismiss it when
-you want to ask without that context. In Changes, the **Ask** button can also copy the selected lines
-into the composer explicitly.
+you want to ask without that context. With a diff in the centre, the **Ask** button can also copy the
+selected lines into the composer explicitly.
 
 ## Command center
 

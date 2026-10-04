@@ -664,27 +664,6 @@
   white-space: nowrap;
 }
 
-.session-meta-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 3px;
-  min-width: 0;
-}
-
-.meta-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--bg-1);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  white-space: nowrap;
-}
-
 .workspace {
   background: var(--bg-0);
 }
@@ -693,25 +672,6 @@
   padding: 14px 20px 11px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-0);
-}
-
-.workspace-title-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.workspace-agent-frame {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  background: var(--bg-1);
-  border: 1px solid var(--line);
-  flex-shrink: 0;
 }
 
 .workspace-title {
@@ -734,26 +694,6 @@
   background: var(--bg-1);
   border-radius: var(--radius);
   padding: 2px 8px;
-}
-
-.workspace-status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 500;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: var(--bg-1);
-  border: 1px solid var(--line);
-  flex-shrink: 0;
-}
-
-.status-badge-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
 }
 
 .lane-count {
@@ -1061,36 +1001,6 @@
   .command-lens-footer {
     display: none;
   }
-}
-
-.active-skills-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  max-width: min(360px, 42vw);
-  padding: 1px 6px;
-  border: 1px solid color-mix(in srgb, var(--focus) 24%, var(--line));
-  border-radius: 3px;
-  color: var(--ink-2);
-  background: color-mix(in srgb, var(--focus) 5%, transparent);
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.active-skills-pill svg {
-  flex: 0 0 auto;
-  color: var(--focus);
-}
-
-.active-skills-label {
-  color: var(--ink-3);
-}
-
-.active-skills-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1576,4 +1486,46 @@
   border-radius: var(--radius);
   background: var(--bg-1);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.lane-strip-row {
+  padding: 8px 16px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.center-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.center-viewer {
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.right-panel-pane {
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gate-stack {
+  flex-shrink: 0;
+  max-height: 60%;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  border-left: 2px solid var(--st-needs);
+  background: var(--bg-1);
+}
+
+.gate-stack > div + div {
+  margin-top: 14px;
 }

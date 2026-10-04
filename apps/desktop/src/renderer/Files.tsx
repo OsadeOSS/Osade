@@ -4,8 +4,8 @@ import {
   useState,
   type JSX,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { TaskView } from '@osade/contract';
 
@@ -15,9 +15,6 @@ import { fileAttach, lineRangeFromOffsets, lineSpan, type ComposerAttach } from 
 import { fuzzyPath } from './files-search.js';
 import { flagColour, highlight } from './highlight.js';
 import { useFileOpenReminder } from './useFileOpenReminder.js';
-
-const TREE_KEY = 'osade.files-tree-width';
-const TREE_DEFAULT = 200;
 
 type Flag = 'M' | 'A' | 'D' | '?';
 
@@ -33,6 +30,9 @@ export interface FsEntry {
 /**
  * Files lane — tree of this chat's cwd, editable contents with Dark+ colouring, dirty files marked.
  *
+ * Laid out like Orca: the tree is the side panel, and the open file renders into `viewerHost`,
+ * a slot in the centre column, so code gets the room the conversation normally has.
+ *
  * Refresh is tied to agent facts (CDC already pushed those) plus a 2s tick while this lane is
  * open. Open-file contents are not overwritten while the buffer is dirty.
  */
@@ -42,8 +42,14 @@ export function Files({
   openPath,
   onOpenChange,
   notesRevision = 0,
+  viewerHost,
+  onShow,
 }: {
   task: TaskView;
+  /** The centre column's slot for the open file. Nothing renders there until it exists. */
+  viewerHost: HTMLElement | null;
+  /** A file was opened: bring the centre over to it. */
+  onShow?: () => void;
   onAttach?: (attach: ComposerAttach | null) => void;
   /**
    * Issue #19 — a quick note's file, to open here when the note is clicked.
@@ -69,7 +75,6 @@ export function Files({
    */
   onOpenChange?: (open: { file: string | null; line: number | null } | null) => void;
 }): JSX.Element {
-  const [width, setWidth] = useState(() => loadWidth());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']));
   const [listed, setListed] = useState<Record<string, FsEntry[]>>({});
   const [selected, setSelected] = useState<string | null>(null);
@@ -87,7 +92,6 @@ export function Files({
   const [saved, setSaved] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const drag = useRef<{ start: number; width: number } | null>(null);
   const dirty = file != null && !file.binary && !file.truncated && text !== saved;
   const stamp = `${task.task.id}:${task.cwd}:${task.agent?.last_event_at ?? 0}:${task.status}`;
   const drafts = useRef(new Map<string, string>());
@@ -121,8 +125,11 @@ export function Files({
   const openSeq = openPath?.n ?? 0;
   const openLine = openPath?.line ?? null;
   const [seek, setSeek] = useState<{ line: number; n: number } | null>(null);
+  const onShowRef = useRef(onShow);
+  onShowRef.current = onShow;
   useEffect(() => {
     if (openTarget == null) return;
+    onShowRef.current?.();
     setSelected(openTarget);
     setSeek(openLine == null ? null : { line: openLine, n: openSeq });
   }, [openTarget, openSeq, openLine]);
@@ -222,6 +229,7 @@ export function Files({
       setPreview(path);
     }
     setSelected(path);
+    onShow?.();
   }
 
   function closeTab(path: string): void {
@@ -241,31 +249,6 @@ export function Files({
     });
   }
 
-  function onDragStart(event: ReactMouseEvent<HTMLDivElement>): void {
-    event.preventDefault();
-    drag.current = { start: event.clientX, width };
-    function move(ev: MouseEvent): void {
-      if (!drag.current) return;
-      const next = Math.min(420, Math.max(140, drag.current.width + (ev.clientX - drag.current.start)));
-      setWidth(next);
-    }
-    function up(): void {
-      drag.current = null;
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
-      setWidth((current) => {
-        try {
-          localStorage.setItem(TREE_KEY, String(current));
-        } catch {
-          // ignore
-        }
-        return current;
-      });
-    }
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
-  }
-
   const hits = filter.trim().length === 0
     ? null
     : Object.values(listed)
@@ -273,16 +256,8 @@ export function Files({
         .filter((entry) => entry.kind === 'file' && fuzzyPath(filter, entry.path));
 
   return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
-      <div
-        style={{
-          width,
-          flexShrink: 0,
-          overflow: 'auto',
-          borderRight: '0.5px solid var(--line)',
-          padding: '8px 0',
-        }}
-      >
+    <>
+      <div style={{ height: '100%', minHeight: 0, overflow: 'auto', padding: '8px 0' }}>
         <div style={{ padding: '0 8px 8px' }}>
           <input
             value={filter}
@@ -323,15 +298,8 @@ export function Files({
           <p style={{ margin: '8px 12px', color: 'var(--st-fail)', fontSize: 'var(--t-xs)' }}>{error}</p>
         )}
       </div>
-      <div
-        onMouseDown={onDragStart}
-        style={{
-          width: 5,
-          cursor: 'col-resize',
-          flexShrink: 0,
-          background: 'transparent',
-        }}
-      />
+      {viewerHost &&
+        createPortal(
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {reminder != null && (
           // Issue #19 — the passive reminder. A note filed against the file that just opened.
@@ -444,8 +412,10 @@ export function Files({
           onSelectRange={(start, end) => setRange(lineRangeFromOffsets(text, start, end))}
           seek={seek}
         />
-      </div>
-    </div>
+      </div>,
+          viewerHost,
+        )}
+    </>
   );
 }
 
@@ -521,6 +491,8 @@ function TreeRow({
   const colour = flagColour(entry.flag);
   return (
     <button
+      data-path={entry.path}
+      data-kind={entry.kind}
       onClick={onClick}
       onDoubleClick={onPin}
       style={{
@@ -886,14 +858,4 @@ function isMarkdown(path: string): boolean {
 function fileName(path: string): string {
   const slash = path.lastIndexOf('/');
   return slash === -1 ? path : path.slice(slash + 1);
-}
-
-function loadWidth(): number {
-  try {
-    const raw = Number(localStorage.getItem(TREE_KEY));
-    if (Number.isFinite(raw) && raw >= 140 && raw <= 420) return raw;
-  } catch {
-    // ignore
-  }
-  return TREE_DEFAULT;
 }

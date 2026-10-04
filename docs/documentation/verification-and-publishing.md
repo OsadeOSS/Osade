@@ -46,7 +46,9 @@ Requesting the pull request creates an approval card; it does not publish immedi
 
 ## Approval gates
 
-A gate shows the exact action and payload about to run. Choose:
+A gate appears at the top of the side panel, above whichever view is open, and shows the exact
+action and payload about to run. If the side panel is hidden, the gate appears above the
+conversation instead. Choose:
 
 - **Approve** to run exactly what is shown;
 - **Deny** to reject it;

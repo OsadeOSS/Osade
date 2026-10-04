@@ -99,8 +99,21 @@ export interface PtySize {
 interface Session {
   cwd: string;
   child: IPty;
+  /** Output not yet read by the open view. */
   buf: string;
+  /** Recent output, replayed when a view reattaches to a running shell. */
+  history: string;
   alive: boolean;
+}
+
+const HISTORY_LIMIT = 256_000;
+
+/** Keep the tail, cut at a line break so the replay does not start mid escape sequence. */
+export function trimHistory(history: string, limit = HISTORY_LIMIT): string {
+  if (history.length <= limit) return history;
+  const tail = history.slice(-limit);
+  const newline = tail.indexOf('\n');
+  return newline === -1 ? tail : tail.slice(newline + 1);
 }
 
 export class TaskShells {
@@ -127,10 +140,11 @@ export class TaskShells {
       env: kind === 'gitbash' ? { ...shellEnv(), CHERE_INVOKING: '1' } : shellEnv(),
       ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}),
     });
-    const session: Session = { cwd, child, buf: '', alive: true };
+    const session: Session = { cwd, child, buf: '', history: '', alive: true };
     child.onData((chunk) => {
       session.buf += chunk;
       if (session.buf.length > 200_000) session.buf = session.buf.slice(-100_000);
+      session.history = trimHistory(session.history + chunk);
     });
     child.onExit(() => {
       session.alive = false;
@@ -160,6 +174,17 @@ export class TaskShells {
     const out = session.buf;
     session.buf = '';
     return out;
+  }
+
+  /**
+   * Everything recent, for a view that just (re)attached. Clears the unread buffer, since the
+   * replay already contains it.
+   */
+  replay(taskId: string): string {
+    const session = this.#sessions.get(taskId);
+    if (!session) return '';
+    session.buf = '';
+    return session.history;
   }
 
   close(taskId: string): void {

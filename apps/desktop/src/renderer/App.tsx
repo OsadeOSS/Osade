@@ -73,7 +73,7 @@ type Tab =
       submitting?: boolean;
     }
   | { kind: 'chat'; id: string; focusId?: string; optimistic?: string; isolatedNotice?: string }
-  | { kind: 'terminal'; id: string; cwd: string; shell: ShellKind; title: string };
+  | { kind: 'terminal'; id: string; repoId: string | null; cwd: string; shell: ShellKind; title: string };
 
 interface PendingDraft {
   repoId: string | null;
@@ -398,7 +398,7 @@ export function App(): JSX.Element {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [activeId, agentModal, defaultAgent, flat, menu, palette, panel, panelOpen, repo, selected, selectedChat, tabs]);
+  }, [activeId, agentModal, byRepo, defaultAgent, flat, menu, palette, panel, panelOpen, repo, repoPaths, selected, selectedChat, tabs]);
 
   function openPanel(next: PanelLane): void {
     setPanel(next);
@@ -487,6 +487,18 @@ export function App(): JSX.Element {
     setActiveId(chatId);
   }
 
+  /** The repository the active tab is working in, when it knows. */
+  function activeRepo(): { repoId: string | null; path: string | null } | null {
+    if (activeTab?.kind === 'draft') return { repoId: activeTab.repoId, path: activeTab.repoPath };
+    if (activeTab?.kind === 'terminal') return { repoId: activeTab.repoId, path: activeTab.cwd };
+    if (selected) {
+      const id = selected.task.repo_id;
+      const path = repoPaths[id] ?? (selected.attachment === 'repo' ? selected.cwd : null);
+      return { repoId: id, path };
+    }
+    return null;
+  }
+
   async function openDraftTab(from?: {
     repoId: string;
     path?: string;
@@ -494,8 +506,35 @@ export function App(): JSX.Element {
     checkoutRef?: string;
     baseRef?: string;
   }): Promise<void> {
-    let repoId = from?.repoId ?? repo?.repoId ?? null;
-    let repoPath = from?.path ?? repo?.path ?? null;
+    // A new session belongs to the repo already in front of you: the one asked for, else the
+    // active tab's, else the window's, else the most recent project in the sidebar. The folder
+    // picker is only for a window that has no repository at all.
+    const context = activeRepo();
+    let repoId: string | null;
+    let repoPath: string | null;
+    if (from) {
+      repoId = from.repoId;
+      repoPath = from.path ?? null;
+    } else if (context && (context.repoId != null || context.path != null)) {
+      repoId = context.repoId;
+      repoPath = context.path;
+    } else {
+      repoId = repo?.repoId ?? byRepo[0]?.repoId ?? null;
+      repoPath = null;
+    }
+    if (repoPath == null && repoId != null) {
+      repoPath = repoPaths[repoId] ?? (repo?.repoId === repoId ? repo.path : null);
+    }
+
+    if (repoPath == null && repoId != null) {
+      try {
+        repoPath = (await api.repoPath(repoId)).path;
+        const known = { id: repoId, path: repoPath };
+        setRepoPaths((current) => ({ ...current, [known.id]: known.path }));
+      } catch {
+        // An unknown or moved repo falls through to the picker.
+      }
+    }
 
     if (repoPath == null) {
       let picked: OpenRepo | null;
@@ -569,7 +608,7 @@ export function App(): JSX.Element {
     setView('list');
     setTabs((current) => [
       ...current,
-      { kind: 'terminal', id, cwd: pending.repoPath!, shell, title: option?.label ?? 'Terminal' },
+      { kind: 'terminal', id, repoId: pending.repoId, cwd: pending.repoPath!, shell, title: option?.label ?? 'Terminal' },
     ]);
     setActiveId(id);
   }

@@ -347,9 +347,13 @@ async function runSmokeShot(target: BrowserWindow): Promise<void> {
 
     // `OSADE_SMOKE_CLICK` opens something before the photograph. The detail panels — gates, the
     // verification plan, the PR flow, conventions — are only reachable by selecting a row, so
-    // without this the only thing a smoke run can ever see is the ledger.
-    const clickSelector = process.env.OSADE_SMOKE_CLICK;
-    if (clickSelector) {
+    // without this the only thing a smoke run can ever see is the ledger. `>>` chains clicks, for
+    // a view that is several steps in (a chat, then a side-panel view, then a file in it).
+    const clickSelectors = (process.env.OSADE_SMOKE_CLICK ?? '')
+      .split('>>')
+      .map((selector) => selector.trim())
+      .filter(Boolean);
+    for (const clickSelector of clickSelectors) {
       let clicked = false;
       for (let attempt = 0; attempt < 25; attempt++) {
         // If first-run onboarding screen is showing, dismiss it

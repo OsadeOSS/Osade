@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { availableShells, defaultShell, TaskShells } from '../../src/domain/task-shell.js';
+import { availableShells, defaultShell, TaskShells, trimHistory } from '../../src/domain/task-shell.js';
 
 let dir: string;
 let shells: TaskShells;
@@ -64,6 +64,24 @@ describe('TaskShells', () => {
     } else {
       expect(shell.command.length).toBeGreaterThan(0);
     }
+  });
+
+  it('replays recent output to a view that reattaches', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'osade-shell-'));
+    shells = new TaskShells();
+    shells.open('t1', dir);
+    shells.write('t1', 'echo OSADE_REPLAY_OK\r');
+    await waitFor('OSADE_REPLAY_OK');
+    shells.open('t1', dir);
+    expect(shells.replay('t1')).toContain('OSADE_REPLAY_OK');
+    // The replay already holds the unread output, so it is not delivered twice.
+    expect(shells.read('t1')).not.toContain('OSADE_REPLAY_OK');
+  });
+
+  it('trims history at a line break', () => {
+    expect(trimHistory('short', 10)).toBe('short');
+    expect(trimHistory('aaaa\nbbbb\ncccc', 9)).toBe('cccc');
+    expect(trimHistory('abcdefghij', 4)).toBe('ghij');
   });
 
   it('open is idempotent for the same task', () => {

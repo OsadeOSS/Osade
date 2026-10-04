@@ -1,6 +1,6 @@
 ---
 title: Notes, rules, and context
-description: Preserve repository knowledge with quick notes, durable agent rules, active skills, and read-only context repositories.
+description: Preserve repository knowledge with quick notes, durable agent rules, and read-only context repositories.
 ---
 
 # Notes, rules, and context
@@ -40,10 +40,5 @@ The attached repositories are listed above the transcript and included in the ag
 explicitly marks the primary worktree as the only editable repository.
 
 Context repositories belong to the conversation and can be removed at any time.
-
-## Active skills
-
-When an agent reports active repository skills, the session header shows a **Skills** badge with
-their names. This makes it visible which specialized instructions are affecting the current lane.
 
 See [Workspace and review](workspace-and-review.md) for view-specific composer attachments.

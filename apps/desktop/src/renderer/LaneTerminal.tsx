@@ -1,14 +1,49 @@
 import { useEffect, useRef, type JSX } from 'react';
 import { FitAddon } from '@xterm/addon-fit';
-import { Terminal } from '@xterm/xterm';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { Terminal, type ITheme } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 
 import { api, type ShellKind } from './api.js';
 import { terminalKeyAction } from './lane-terminal.js';
 
+const BACKGROUND = '#0f1214';
+
+/** Full 16-colour palette so TUIs (Claude, Codex, htop, git) render as they do in a real terminal. */
+const THEME: ITheme = {
+  background: BACKGROUND,
+  foreground: '#c9d1d9',
+  cursor: '#58a6ff',
+  cursorAccent: BACKGROUND,
+  selectionBackground: '#264f78',
+  black: '#484f58',
+  red: '#ff7b72',
+  green: '#3fb950',
+  yellow: '#d29922',
+  blue: '#58a6ff',
+  magenta: '#bc8cff',
+  cyan: '#39c5cf',
+  white: '#b1bac4',
+  brightBlack: '#6e7681',
+  brightRed: '#ffa198',
+  brightGreen: '#56d364',
+  brightYellow: '#e3b341',
+  brightBlue: '#79c0ff',
+  brightMagenta: '#d2a8ff',
+  brightCyan: '#56d4dd',
+  brightWhite: '#f0f6fc',
+};
+
+/** Poll faster while output is flowing, so a burst drains without 16 ms steps between chunks. */
+const IDLE_POLL_MS = 16;
+const BUSY_POLL_MS = 4;
+
 /** Where a terminal's bytes go: a lane's shell, or a standalone terminal tab's. */
 interface PtyBackend {
-  open: (size: { cols: number; rows: number }) => Promise<unknown>;
+  /** `replay` is the shell's recent output when reattaching to one that is already running. */
+  open: (size: { cols: number; rows: number }) => Promise<{ replay: string }>;
   read: () => Promise<{ text: string }>;
   write: (data: string) => Promise<unknown>;
   resize: (cols: number, rows: number) => Promise<unknown>;
@@ -75,21 +110,38 @@ function PtyTerminal({
 
     const term = new Terminal({
       cursorBlink: true,
-      scrollback: 5000,
+      scrollback: 10_000,
       fontFamily: '"IBM Plex Mono", ui-monospace, "Cascadia Code", Consolas, monospace',
-      fontSize: 12.5,
-      theme: {
-        background: '#0f1214',
-        foreground: '#c9d1d9',
-        cursor: '#58a6ff',
-        selectionBackground: '#22272e',
-      },
+      fontSize: 13,
+      lineHeight: 1.15,
+      macOptionIsMeta: true,
+      // Unicode 11 widths go through the proposed API.
+      allowProposedApi: true,
+      theme: THEME,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const unicode = new Unicode11Addon();
+    term.loadAddon(unicode);
+    term.unicode.activeVersion = '11';
+    // Opens through the main window's handler, which hands it to the system browser.
+    term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri, '_blank')));
     term.open(el);
     termRef.current = term;
     fitRef.current = fit;
+
+    // GPU rendering, as in Ghostty/Orca. The DOM renderer takes over if WebGL is unavailable or lost.
+    let webgl: WebglAddon | null = null;
+    try {
+      webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        webgl?.dispose();
+        webgl = null;
+      });
+      term.loadAddon(webgl);
+    } catch {
+      webgl = null;
+    }
 
     const fitNow = (): void => {
       if (el.clientWidth < 8 || el.clientHeight < 8) return;
@@ -100,6 +152,12 @@ function PtyTerminal({
       }
     };
     fitNow();
+    // Glyphs measured before the web font loads come out the wrong width.
+    void document.fonts.ready.then(() => {
+      if (stop) return;
+      webgl?.clearTextureAtlas();
+      fitNow();
+    });
     const size = {
       cols: Math.max(term.cols, 80),
       rows: Math.max(term.rows, 24),
@@ -146,10 +204,30 @@ function PtyTerminal({
     };
     el.addEventListener('paste', onPaste, true);
 
+    let timer: number | undefined;
+    // One read in flight at a time: overlapping reads can land out of order and garble output.
+    const poll = (): void => {
+      void backend
+        .read()
+        .then(
+          (chunk) => {
+            if (stop) return;
+            if (chunk.text.length > 0) term.write(chunk.text);
+            timer = window.setTimeout(poll, chunk.text.length > 0 ? BUSY_POLL_MS : IDLE_POLL_MS);
+          },
+          () => {
+            if (!stop) timer = window.setTimeout(poll, IDLE_POLL_MS);
+          },
+        );
+    };
+
     void backend
       .open(size)
-      .then(() => {
+      .then(({ replay }) => {
         if (stop) return;
+        // Reads start after the replay, which already holds anything unread.
+        if (replay.length > 0) term.write(replay);
+        poll();
         data = term.onData((chunk) => {
           void backend.write(chunk).catch((err: Error) => {
             term.write(`\r\n\x1b[31m${err.message}\x1b[0m\r\n`);
@@ -163,12 +241,6 @@ function PtyTerminal({
         if (!stop) term.writeln(`\x1b[31m${err.message}\x1b[0m`);
       });
 
-    const timer = window.setInterval(() => {
-      void backend.read().then((chunk) => {
-        if (chunk.text.length > 0) term.write(chunk.text);
-      });
-    }, 16);
-
     const ro = new ResizeObserver(() => {
       fitNow();
     });
@@ -178,7 +250,7 @@ function PtyTerminal({
       stop = true;
       data?.dispose();
       resized?.dispose();
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
       ro.disconnect();
       el.removeEventListener('paste', onPaste, true);
       termRef.current = null;
@@ -214,7 +286,7 @@ function PtyTerminal({
         height: '100%',
         width: '100%',
         minHeight: 0,
-        background: '#0f1214',
+        background: BACKGROUND,
       }}
     />
   );
