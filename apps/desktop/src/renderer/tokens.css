@@ -1,28 +1,29 @@
 /*
  * Design tokens — OSADE.md §19.2.
  *
- * Dark ground, one blue accent for selection/focus, greyscale otherwise. IBM Plex Mono
- * throughout (system mono until Plex is bundled). 1px rules, no shadows. 3px radius on
- * controls only. Sentence case in content; chrome stays quiet.
+ * Operational dark ground. Blue marks selection, amber is reserved for human gates,
+ * and depth is limited to transient surfaces such as the command lens and composer.
  */
 
 :root {
   color-scheme: dark;
 
-  --bg-0: #0f1214;
-  --bg-1: #14181b;
-  --bg-2: #1b2025;
-  --bg-3: #22272e;
-  --line: #21262c;
-  --ink: #c9d1d9;
-  --ink-2: #7d868e;
-  --ink-3: #6e7772;
+  --bg-0: #0a0e11;
+  --bg-1: #10151a;
+  --bg-2: #171d23;
+  --bg-3: #202832;
+  --line: #222b34;
+  --line-strong: #303b46;
+  --ink: #d7dee5;
+  --ink-2: #929da7;
+  --ink-3: #69747e;
 
-  --st-needs: #d9903f;
-  --st-live: #57a773;
-  --st-fail: #cf6a67;
-  --st-rest: #6e7772;
-  --focus: #58a6ff;
+  --st-needs: #f0a04b;
+  --st-live: #62b482;
+  --st-fail: #df7773;
+  --st-rest: #74808a;
+  --focus: #6ca8e8;
+  --focus-rgb: 108, 168, 232;
 
   /* Agent colours — cousins of --st-* / --focus, never the status tokens themselves. */
   --ag-claude: #6ea0d4;
@@ -47,8 +48,8 @@
   --t-m: 14px;
   --t-l: 17px;
 
-  --radius: 3px;
-  --radius-panel: 3px;
+  --radius: 6px;
+  --radius-panel: 10px;
 }
 
 * {
@@ -79,11 +80,11 @@ kbd {
 }
 
 ::selection {
-  background: rgba(88, 166, 255, 0.28);
+  background: rgba(var(--focus-rgb), 0.28);
 }
 
 :focus-visible {
-  outline: 1px solid var(--focus);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -99,7 +100,7 @@ button {
 
 button:hover:not(:disabled) {
   background: var(--bg-3);
-  border-color: #30363d;
+  border-color: var(--line-strong);
 }
 
 button:disabled {
@@ -110,7 +111,7 @@ button:disabled {
 button.primary {
   background: var(--bg-3);
   color: var(--ink);
-  border-color: #30363d;
+  border-color: var(--line-strong);
 }
 
 button.primary:hover:not(:disabled) {

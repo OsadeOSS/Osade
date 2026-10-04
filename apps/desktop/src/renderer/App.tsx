@@ -1092,6 +1092,7 @@ export function App(): JSX.Element {
           sidebarHidden={!sidebarOpen}
           onShowSidebar={() => setSidebarOpen(true)}
           onNew={() => void openDraftTab()}
+          onCommand={() => setPalette(true)}
           onSelect={(id) => {
             setActiveId(id);
             setLane('transcript');
@@ -1240,6 +1241,8 @@ export function App(): JSX.Element {
         selected={selected}
         repo={repo}
         chats={groups.map((g) => ({ id: g.chatId, title: chatLabel(g) }))}
+        view={view}
+        browserOpen={browserOpen}
         onOpenChat={(id) => {
           const chat = groups.find((g) => g.chatId === id);
           if (chat) openLane(primaryLane(chat));
@@ -1252,7 +1255,13 @@ export function App(): JSX.Element {
           setPalette(false);
           void openPlan().catch((err: Error) => setActionError(err.message));
         }}
-        onBoard={() => setView('board')}
+        onBoard={() => setView((current) => (current === 'board' ? 'list' : 'board'))}
+        onBrowser={() => setBrowserOpen((current) => !current)}
+        onQuickNote={openCapture}
+        onNotes={() => {
+          setView('list');
+          setLane('notes');
+        }}
         onError={setActionError}
       />
 
@@ -1318,6 +1327,7 @@ function TabStrip({
   sidebarHidden,
   onShowSidebar,
   onNew,
+  onCommand,
   onSelect,
   onClose,
 }: {
@@ -1327,6 +1337,7 @@ function TabStrip({
   sidebarHidden?: boolean;
   onShowSidebar?: () => void;
   onNew: () => void;
+  onCommand: () => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
 }): JSX.Element {
@@ -1398,6 +1409,20 @@ function TabStrip({
           </svg>
         </button>
       )}
+      <button
+        type="button"
+        className="tab-command-button"
+        onClick={onCommand}
+        title={`Open command center (${chord('k')})`}
+        aria-label="Open command center"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.3" />
+          <path d="m10.3 10.3 3.2 3.2" />
+        </svg>
+        <span>Command</span>
+        <kbd>{chord('k')}</kbd>
+      </button>
     </div>
   );
 }
