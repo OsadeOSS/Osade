@@ -2,6 +2,7 @@ import type { ChatTurn, TaskView } from '@osade/contract';
 
 import { stripNotesPrompt } from './quick-notes.js';
 import { stripContextBlock } from './repo-context.js';
+import { stripSkillState } from './skill-state.js';
 
 export interface ChatLine {
   id: string;
@@ -84,7 +85,7 @@ export function chatLines(task: TaskView, followUps: readonly string[] = []): Ch
 
   let lastUserAt = task.task.created_at;
   for (const turn of turns) {
-    const text = turn.role === 'user' ? visibleUserText(turn.text) : turn.text.trim();
+    const text = turn.role === 'user' ? visibleUserText(turn.text) : stripSkillState(turn.text);
     if (!text) continue;
     if (turn.role === 'user') lastUserAt = turn.created_at;
     lines.push(lineFromTurn(turn, agentId, text, lastUserAt));
@@ -142,7 +143,7 @@ function agentOverlay(task: TaskView): ChatLine | null {
   const final =
     fact?.final_message?.trim() ||
     (task.output?.kind === 'final_output' ? task.output.text?.trim() : '');
-  const spoken = streamed || final;
+  const spoken = stripSkillState(streamed || final || '');
   const lastUser = [...(task.turns ?? [])].filter((t) => t.role === 'user').at(-1);
   const working = task.status === 'implementing' || task.status === 'verifying' || task.status === 'queued';
   if (spoken) {

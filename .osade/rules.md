@@ -1,8 +1,11 @@
 # Repository skills
 
-Two repository-local workflows are available under `.osade/skills/`.
+At the start of a task, and whenever its objective or phase materially changes, read
+`.osade/skills/skill-router/SKILL.md` and use it to select the smallest useful set of
+repository skills. The router is a decision layer for the coding agent already doing the work;
+it never hands control to a separate autonomous agent.
 
-- When the user names `$memo-harness`, or asks to improve a repeatable agent harness from measured execution feedback, read `.osade/skills/memo-harness/SKILL.md` completely and follow it.
-- When the user names `$dream-rsi`, or asks for repeated open-ended discovery with scored proposals and exploration-policy improvement, read `.osade/skills/dream-rsi/SKILL.md` completely and follow it.
-
-Use the narrowest matching skill. Do not treat either skill as authorization for extra agents, external services, expensive runs, or broader filesystem changes.
+If the user names a skill explicitly, load it. `memory-harness` is the human-facing name of the
+existing `.osade/skills/memo-harness/SKILL.md` skill. During open source development, continue
+to follow the existing `$open-source` guidelines. Skill selection does not authorize extra
+agents, external services, expensive runs, or broader filesystem changes.

@@ -62,8 +62,10 @@ try {
 
   db.prepare(
     `INSERT OR REPLACE INTO agent_fact
-       (task_id, substrate_pane_id, substrate_state, last_event, last_event_at, activity_text, pane_alive)
-     VALUES ('t_smoke01', 'p7', 'working', 'to_review', ?, 'waiting on your approval', 1)`,
+       (task_id, substrate_pane_id, substrate_state, last_event, last_event_at, activity_text,
+        final_message, pane_alive)
+     VALUES ('t_smoke01', 'p7', 'working', 'to_review', ?, 'waiting on your approval',
+             '<osade_skills>loop-engineering</osade_skills>\n\nThe focused retry test passes.', 1)`,
   ).run(NOW);
 
   // §10.1 — a confirmed plan, so the review panel shows steps rather than a derive button.

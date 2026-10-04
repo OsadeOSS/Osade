@@ -1435,6 +1435,36 @@
   }
 }
 
+.active-skills-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: min(360px, 42vw);
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--focus) 24%, var(--line));
+  border-radius: 3px;
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--focus) 5%, transparent);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.active-skills-pill svg {
+  flex: 0 0 auto;
+  color: var(--focus);
+}
+
+.active-skills-label {
+  color: var(--ink-3);
+}
+
+.active-skills-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-live {
     animation: none;

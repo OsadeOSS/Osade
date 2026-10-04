@@ -26,6 +26,7 @@ import { chatLabel, type ChatGroup } from './lanes.js';
 import type { CatalogAgent } from './RepoSettings.js';
 import { GLYPH, STATUS, TONE_COLOUR, ago, statusCopyFor } from './status.js';
 import type { ContextRepo } from './repo-context.js';
+import { activeSkillsFromTask } from './skill-state.js';
 import { Transcript } from './Transcript.js';
 import { VerifyPlanReview } from './VerifyPlanReview.js';
 
@@ -135,6 +136,7 @@ contextRepos?: ContextRepo[];
   const keepTerminal = retainLaneTerminal(rememberedTerminal, focused.task.id);
   const copy = statusCopyFor(chat.status, focused.agent?.external_block);
   const colour = TONE_COLOUR[copy.tone];
+  const activeSkills = activeSkillsFromTask(focused);
   const openGates = chat.lanes.flatMap((t) =>
     t.openGates.filter((g) => g.decided_at == null).map((gate) => ({ gate, task: t })),
   );
@@ -216,6 +218,30 @@ contextRepos?: ContextRepo[];
               {focused.attachment === 'repo' && (
                 <span className="meta-pill" style={{ color: 'var(--ink-3)' }}>
                   checkout
+                </span>
+              )}
+              {activeSkills.length > 0 && (
+                <span
+                  className="active-skills-pill"
+                  title={`Active skills: ${activeSkills.join(', ')}`}
+                  aria-label={`Active skills: ${activeSkills.join(', ')}`}
+                >
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    aria-hidden="true"
+                  >
+                    <circle cx="4" cy="4" r="2" />
+                    <circle cx="12" cy="4" r="2" />
+                    <circle cx="8" cy="12" r="2" />
+                    <path d="M5.8 4h4.4M5 5.6l2 4.5M11 5.6l-2 4.5" />
+                  </svg>
+                  <span className="active-skills-label">Skills</span>
+                  <span className="mono active-skills-value">{activeSkills.join(' + ')}</span>
                 </span>
               )}
             </div>
