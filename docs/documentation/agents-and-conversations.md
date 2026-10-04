@@ -66,7 +66,9 @@ Terminal tabs and a lane's **Terminal** view use the same emulator:
 
 If you start a coding agent yourself in a terminal tab, Osade notices it and lists it in the
 sidebar under the project, in a **Terminal** card. Clicking the row switches to that tab, and the
-tab itself shows the agent's icon and topic in place of the shell's name.
+tab itself shows the agent's icon and topic in place of the shell's name. Right-click the row and
+choose **Delete terminal** to close the tab. This ends the shell and the agent running in it, and
+discards the tab's saved output, the same as closing the tab.
 
 Osade finds the agent by checking the processes running under the tab's shell about every two
 seconds, so detection does not depend on the agent cooperating. It recognises Claude Code, Codex,
