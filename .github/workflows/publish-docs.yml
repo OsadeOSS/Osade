@@ -1,0 +1,28 @@
+name: Publish documentation site
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/documentation/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Trigger landing-page rebuild
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the landing-page deploy hook
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.LANDINGPAGE_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "::error::Add the LANDINGPAGE_DEPLOY_HOOK_URL repository secret."
+            exit 1
+          fi
+
+          curl --fail-with-body --retry 3 --request POST "$DEPLOY_HOOK_URL"
