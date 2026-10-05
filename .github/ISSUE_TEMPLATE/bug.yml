@@ -1,0 +1,79 @@
+name: Bug report
+description: Report a reproducible bug in Osade.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you start:** Read [CONTRIBUTING.md](https://github.com/OsadeOSS/Osade/blob/main/CONTRIBUTING.md) and [SECURITY.md](https://github.com/OsadeOSS/Osade/blob/main/SECURITY.md).
+
+        Security vulnerabilities do **not** go here — see SECURITY.md for the private reporting path.
+
+        Keep this short. Describe what you observed, not a guessed cause.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: This is a reproducible bug, not a feature request or question.
+          required: true
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence — what went wrong?
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you observe? Paste relevant output, errors, or a screenshot.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence of steps that shows the problem.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - OS:
+        - Node.js version (`node --version`):
+        - Agent CLI and version (e.g. `claude --version`):
+        - Agent used (`claude` / `codex` / `opencode` / `pi`):
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        Paste relevant lines from `~/.osade/logs/app.log` (`%USERPROFILE%\.osade\logs\app.log` on Windows).
+        Trim to the lines that matter.
+      render: text

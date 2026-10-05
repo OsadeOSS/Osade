@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a new feature or improvement.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you start:** Read [CONTRIBUTING.md](https://github.com/OsadeOSS/Osade/blob/main/CONTRIBUTING.md).
+
+        Features are implemented by maintainer-controlled agents after triage. Filing a request does not reserve the work or authorize a pull request. Keep this concise.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and discussions — this is not already tracked.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can you not do today, or what is painful? Be specific.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should Osade do differently? Describe the behavior, not the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or other approaches did you consider?
