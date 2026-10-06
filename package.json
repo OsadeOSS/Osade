@@ -50,6 +50,7 @@
       "better-sqlite3",
       "electron",
       "esbuild",
+      "electron-winstaller",
       "node-pty"
     ]
   },
