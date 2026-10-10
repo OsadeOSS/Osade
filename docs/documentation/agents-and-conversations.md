@@ -4,6 +4,7 @@ description: Run one or several coding agents in a shared conversation while kee
 ---
 
 # Agents and conversations
+<img width="1783" height="942" alt="1" src="https://github.com/user-attachments/assets/bc1fa32c-ed24-4505-946e-903796a33e2b" />
 
 An Osade conversation can contain one or several **lanes**. A lane is one agent process attached
 to one checkout. The conversation provides the shared transcript; each lane keeps its own agent,
